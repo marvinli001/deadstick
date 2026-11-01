@@ -53,7 +53,10 @@ export function checker(config: Config): CheckEndpoint {
         result.nodeCount = nodes.length;
         result.subscriptionExpired = limits.expired;
         result.quotaExhausted = limits.quotaExhausted;
-        const count = Math.min(settings.nodeSampleSize, nodes.length);
+        const count =
+          limits.expired || limits.quotaExhausted
+            ? 0
+            : Math.min(settings.nodeSampleSize, nodes.length);
         const samples = Array.from(
           { length: count },
           (_, i) => nodes[Math.floor((i * nodes.length) / count)]!,
@@ -61,7 +64,7 @@ export function checker(config: Config): CheckEndpoint {
         result.sampledNodes = count;
         const reachable: boolean[] = [];
         let probeError: string | undefined;
-        result.probeMode = config.probeMode;
+        result.probeMode = count > 0 ? config.probeMode : undefined;
         for (const node of samples) {
           if (Date.now() >= start + settings.checkTimeoutMs) {
             reachable.push(false);

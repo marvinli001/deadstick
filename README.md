@@ -53,6 +53,8 @@ docker compose run --rm api node dist/admin.js
 
 Compose 包含 PostgreSQL、一次性迁移、API、worker。数据库没有暴露到宿主机。生产 `APP_KEY` 必须固定并与数据库分别备份；更换后旧订阅无法解密。按需对 Postgres 做常规备份。worker `/admin/health` 心跳超过 30 秒视为异常。
 
+在反代后面部署时，`TRUST_PROXY` 填反代的实际 IP / CIDR，让限流按真实客户端 IP 计算；只信任受控反代，反代应覆盖客户端提供的转发头。留空时忽略转发头，同一个反代后的用户会共享 IP 限额。
+
 ## Telegram 配置
 
 1. 在 [BotFather](https://t.me/BotFather) 创建机器人，将 token 填到 `TELEGRAM_BOT_TOKEN`。随机生成一个 32–256 位 URL 安全字符串，填入 `TELEGRAM_WEBHOOK_SECRET`。

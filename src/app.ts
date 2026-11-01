@@ -45,6 +45,7 @@ export async function buildApp(
     bodyLimit: 2 * 1024 * 1024,
     ajv: { customOptions: { removeAdditional: false } },
     requestTimeout: 30000,
+    trustProxy: config.trustProxy,
   });
   await app.register(cookie);
   await app.register(cors, { origin: config.corsOrigins, credentials: true });

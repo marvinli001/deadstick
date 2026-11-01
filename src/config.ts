@@ -34,6 +34,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     telegramClientId: env.TELEGRAM_CLIENT_ID,
     telegramClientSecret: env.TELEGRAM_CLIENT_SECRET,
     logLevel: env.LOG_LEVEL ?? 'info',
+    trustProxy: env.TRUST_PROXY ? env.TRUST_PROXY.split(',').map((s) => s.trim()) : false,
     probeMode: probeMode as 'tcp' | 'proxy',
     mihomoBin: env.MIHOMO_BIN,
   };
