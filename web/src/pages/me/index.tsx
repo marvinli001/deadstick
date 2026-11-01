@@ -1,16 +1,19 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { NavLink, Outlet, useSearchParams } from 'react-router';
+import { Link, NavLink, Outlet, useSearchParams } from 'react-router';
+import { useQuery } from '@tanstack/react-query';
 import { Alert } from '@/components/arc/alert/alert';
 import { Button } from '@/components/arc/button/button';
 import { HoldToConfirm } from '@/components/arc/hold-to-confirm/hold-to-confirm';
 import { Input } from '@/components/arc/input/input';
+import { Switch } from '@/components/arc/switch/switch';
 import { PasswordField } from '@/components/arc/password-field/password-field';
 import { PasswordStrength } from '@/components/arc/password-strength/password-strength';
 import { useToastStack } from '@/components/arc/toast-stack/toast-stack';
 import { api, errorText, telegramErrorText } from '@/lib/api';
 import { passwordFieldMessages, passwordRules, passwordStrengthMessages } from '@/lib/copy';
 import { roleLabel } from '@/lib/format';
-import { useSession } from '@/lib/session';
+import { isReviewer, useSession } from '@/lib/session';
+import { isMiniApp, telegram } from '@/lib/telegram';
 import type { Session, User } from '@/lib/types';
 import { TelegramButton } from '../Auth';
 import styles from './me.module.css';
@@ -35,6 +38,7 @@ export function MeLayout() {
       <header className={styles.head}>
         <h1>{user.display_name}</h1>
         {user.role !== 'user' && <span className={styles.role}>{roleLabel[user.role]}</span>}
+        {isReviewer(user) && <Link to="/console">管理台</Link>}
       </header>
       <nav className={styles.tabs} aria-label="用户中心">
         {tabs.map((tab) => (
@@ -104,6 +108,55 @@ export function MeProfile() {
           <dd>{roleLabel[user.role]}</dd>
         </div>
       </dl>
+      {isMiniApp && <TelegramPreferences />}
+    </div>
+  );
+}
+
+function TelegramPreferences() {
+  const user = useUser();
+  const { toast } = useToastStack();
+  const [busy, setBusy] = useState(false);
+  const [allowed, setAllowed] = useState(false);
+  const notifications = useQuery({
+    queryKey: ['telegram', 'review-notifications'],
+    queryFn: () => api<{ enabled: boolean }>('/admin/telegram/notifications'),
+    enabled: isReviewer(user),
+  });
+  return (
+    <div className={styles.form}>
+      {telegram?.isVersionAtLeast('6.9') && (
+        <Button
+          variant="secondary"
+          disabled={allowed}
+          onClick={() =>
+            telegram!.requestWriteAccess((granted) => {
+              setAllowed(granted);
+              if (!granted) toast({ type: 'error', title: '未开启 Bot 私信' });
+            })
+          }
+        >
+          {allowed ? 'Bot 私信已开启' : '接收 Bot 私信'}
+        </Button>
+      )}
+      {isReviewer(user) && (
+        <Switch
+          label="审核待办私信"
+          checked={notifications.data?.enabled ?? false}
+          disabled={busy || notifications.isPending || notifications.isError}
+          onCheckedChange={async (enabled) => {
+            setBusy(true);
+            try {
+              await api('/admin/telegram/notifications', { method: 'PUT', body: { enabled } });
+              await notifications.refetch();
+            } catch (error) {
+              toast({ type: 'error', title: errorText(error) });
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

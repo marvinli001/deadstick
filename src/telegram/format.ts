@@ -46,6 +46,14 @@ export const webLink = (config: Config, path: string) =>
   config.publicUrl.startsWith('https://') ? `${config.publicUrl}${path}` : undefined;
 export const startLink = (username: string | undefined, payload: string) =>
   username ? `https://t.me/${username}?start=${payload}` : undefined;
+export const miniAppLink = (config: Config, payload: string) =>
+  config.botUsername ? `https://t.me/${config.botUsername}?startapp=${payload}` : undefined;
+export function miniAppButton(config: Config, text: string, payload: string, privateChat = false) {
+  const site = webLink(config, `/?tgWebAppStartParam=${payload}`);
+  if (privateChat && site) return [{ text, web_app: { url: site } }];
+  const href = miniAppLink(config, payload);
+  return href ? [{ text, url: href }] : [];
+}
 
 export interface ProviderView {
   id: string;
@@ -112,7 +120,7 @@ export function providerKeyboard(
   config: Config,
   options: { username?: string; following?: boolean; interactive: boolean },
 ) {
-  const site = url('🌐 网站详情', webLink(config, `/airports/${encodeURIComponent(p.slug)}`));
+  const site = miniAppButton(config, '📱 详情与留言', `p_${compactId(p.id)}`);
   if (!options.interactive)
     return markup([
       [...url('🤖 在机器人中查看', startLink(options.username, `p_${compactId(p.id)}`)), ...site],
@@ -140,7 +148,7 @@ export function ceremonyKeyboard(p: ProviderView, config: Config) {
     tributeRow(p.id),
     [
       { text: '📤 转发追悼会', switch_inline_query: p.slug },
-      ...url('🌐 墓园', webLink(config, `/airports/${encodeURIComponent(p.slug)}`)),
+      ...miniAppButton(config, '📱 留言', `p_${compactId(p.id)}`),
     ],
   ]);
 }

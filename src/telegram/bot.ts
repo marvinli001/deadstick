@@ -1,6 +1,5 @@
 import { Bot, GrammyError, type Context } from 'grammy';
 import type {
-  BotCommand,
   InlineKeyboardMarkup,
   InlineQueryResultArticle,
   Update,
@@ -32,6 +31,7 @@ import {
   lifecycleLabels,
   listKeyboard,
   markup,
+  miniAppButton,
   providerCard,
   providerKeyboard,
   providerTitle,
@@ -40,11 +40,12 @@ import {
   tributeKinds,
   tributeLabels,
   tributeRow,
-  webLink,
   type ProviderView,
   type TributeKind,
 } from './format.js';
 import { views, type View } from './views.js';
+import { commandMenus, commandsFor } from './commands.js';
+export { commandMenus } from './commands.js';
 
 export const allowedUpdates: Array<Exclude<keyof Update, 'update_id'>> = [
   'message',
@@ -75,47 +76,6 @@ export const allowedUpdates: Array<Exclude<keyof Update, 'update_id'>> = [
   'message_reaction',
   'message_reaction_count',
 ];
-
-type Audience = 'everyone' | 'private' | 'reviewer' | 'groupAdmin';
-const commandTable: Array<BotCommand & { audience: Audience }> = [
-  { command: 'start', description: '开始使用', audience: 'private' },
-  { command: 'help', description: '使用说明', audience: 'everyone', is_ephemeral: true },
-  { command: 'search', description: '搜索机场：名称', audience: 'everyone', is_ephemeral: true },
-  { command: 'status', description: '机场状态：slug', audience: 'everyone', is_ephemeral: true },
-  { command: 'graveyard', description: '逛赛博墓园', audience: 'everyone' },
-  { command: 'ceremony', description: '电子追悼会：slug', audience: 'everyone' },
-  { command: 'tribute', description: '献花：slug', audience: 'everyone', is_ephemeral: true },
-  {
-    command: 'memorial',
-    description: '追悼留言：slug 留言',
-    audience: 'everyone',
-    is_ephemeral: true,
-  },
-  { command: 'follow', description: '关注机场：slug', audience: 'everyone', is_ephemeral: true },
-  { command: 'unfollow', description: '取消关注：slug', audience: 'everyone', is_ephemeral: true },
-  { command: 'following', description: '我的关注', audience: 'everyone', is_ephemeral: true },
-  { command: 'submit', description: '投稿：名称 | slug | 官网 | 订阅', audience: 'private' },
-  { command: 'pending', description: '待处理的复核与审核', audience: 'reviewer' },
-  { command: 'notify', description: '开关复核私信', audience: 'reviewer' },
-  { command: 'review', description: '文字复核：事件ID 结论 证据 原因', audience: 'reviewer' },
-  { command: 'bind', description: '把本群（话题）设为通报群', audience: 'groupAdmin' },
-  { command: 'unbind', description: '取消本群通报', audience: 'groupAdmin' },
-];
-const pick = (audiences: Audience[], ephemeral: boolean): BotCommand[] =>
-  commandTable
-    .filter((c) => audiences.includes(c.audience))
-    .map(({ command, description, is_ephemeral }) => ({
-      command,
-      description,
-      ...(ephemeral && is_ephemeral ? { is_ephemeral } : {}),
-    }));
-/** Command menus per BotCommandScope, used by telegram:setup and /notify. */
-export const commandMenus = {
-  private: pick(['private', 'everyone'], false),
-  reviewer: pick(['private', 'everyone', 'reviewer'], false),
-  groups: pick(['everyone'], true),
-  groupAdmins: pick(['everyone', 'groupAdmin'], true),
-};
 
 const HTML = { parse_mode: 'HTML' as const, link_preview_options: { is_disabled: true } };
 const errorText: Record<string, string> = {
@@ -346,8 +306,7 @@ function registerSetupHandlers(bot: Bot, db: DB, t: Tools) {
     if (!isGroupChat(ctx.chat.type))
       return void (await t.reply(ctx, '请在要绑定的群里发送此命令。'));
     const admin = await t.staff(ctx, ['admin']);
-    if (!admin)
-      return void (await t.reply(ctx, '只有在网站绑定了 Telegram 的管理员可以设置通报群。'));
+    if (!admin) return void (await t.reply(ctx, '只有 Deadstick 管理员可以设置通报群。'));
     const id = String(ctx.chat.id);
     if (ctx.message!.text.split(/[\s@]/)[0] === '/unbind') {
       await db.query("DELETE FROM telegram_chats WHERE id=$1 AND kind='group'", [id]);
@@ -440,6 +399,7 @@ function helpText(username: string) {
     '/search 名称 · /status slug · /graveyard',
     '/ceremony slug · /tribute slug · /memorial slug 留言',
     '/follow slug · /unfollow slug · /following',
+    '/app · Mini App　/me · 我的关注与投稿',
     '/submit（私聊投稿）',
     `在任意聊天输入 <code>@${escape(username)} 机场名</code> 可直接分享机场卡片。`,
     '自动检测只会标记“疑似跑路”，确认跑路必须经过人工核验。',
@@ -450,22 +410,35 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
   const card = async (ctx: Context, p: ProviderView) =>
     v.provider(p, ctx.me.username, ctx.from ? (await t.me(ctx)).id : undefined);
   async function welcome(ctx: Context) {
-    const site = webLink(config, '');
     const privateChat = ctx.chat?.type === 'private';
+    const user = await t.me(ctx);
+    const reviewer = user.role === 'admin' || user.role === 'moderator';
+    if (privateChat)
+      await ctx.api
+        .setMyCommands(commandsFor(user.role), {
+          scope: { type: 'chat', chat_id: ctx.from!.id },
+        })
+        .catch(ignore400);
     await t.reply(
       ctx,
-      `${helpText(ctx.me.username)}\n\n你的 Telegram ID：<code>${ctx.from!.id}</code>`,
+      `<b>Deadstick · 机场观察与赛博墓园</b>\n你的 Telegram ID：<code>${ctx.from!.id}</code>`,
       markup([
         [
           { text: '🔍 搜索机场', switch_inline_query_current_chat: '' },
           { text: '🪦 逛墓园', callback_data: 'gy:0' },
         ],
-        site
-          ? privateChat
-            ? [{ text: '📱 打开 Deadstick', web_app: { url: site } }]
-            : [{ text: '🌐 打开网站', url: site }]
+        miniAppButton(config, '📱 打开 Deadstick', 'airports', privateChat),
+        [
+          ...miniAppButton(config, '📮 投稿', 'submit', privateChat),
+          ...miniAppButton(config, '🔔 我的关注', 'following', privateChat),
+        ],
+        reviewer
+          ? [
+              { text: '🗂 待处理', callback_data: 'pd' },
+              ...miniAppButton(config, '管理台', 'admin', privateChat),
+            ]
           : [],
-        [{ text: '📮 怎么投稿', callback_data: 'hs' }],
+        [{ text: '使用说明', callback_data: 'help' }],
       ]),
     );
   }
@@ -490,15 +463,45 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
       const view = await v.graveyard(0);
       return t.reply(ctx, view.text, view.markup);
     }
-    if (kind === 'submit') return t.reply(ctx, submitHelp);
+    if (kind === 'submit')
+      return t.reply(
+        ctx,
+        submitHelp,
+        markup([miniAppButton(config, '📮 打开投稿表单', 'submit', true)]),
+      );
     if (kind === 'pending' && (await t.staff(ctx))) {
       const view = await v.pending();
       return t.reply(ctx, view.text, view.markup);
     }
     await welcome(ctx);
   });
+  bot.command('app', welcome);
+  bot.command('me', async (ctx) => {
+    if (ctx.chat.type !== 'private') return;
+    await t.me(ctx);
+    await t.reply(
+      ctx,
+      '👤 <b>我的 Deadstick</b>',
+      markup([
+        miniAppButton(config, '🔔 我的关注', 'following', true),
+        miniAppButton(config, '📮 我的投稿', 'submissions', true),
+        miniAppButton(config, '账号', 'me', true),
+      ]),
+    );
+  });
   bot.command('help', (ctx) => t.reply(ctx, helpText(ctx.me.username)));
-  bot.callbackQuery('hs', (ctx) => t.show(ctx, { text: submitHelp, start: 'submit' }));
+  bot.callbackQuery('help', (ctx) =>
+    t.show(ctx, { text: helpText(ctx.me.username), start: 'start' }),
+  );
+  bot.callbackQuery('hs', (ctx) =>
+    t.show(ctx, {
+      text: submitHelp,
+      markup: markup([
+        miniAppButton(config, '📮 打开投稿', 'submit', ctx.chat?.type === 'private'),
+      ]),
+      start: 'submit',
+    }),
+  );
 
   async function results(ctx: Context, query: string) {
     const items = await v.search(query, 8);
@@ -506,12 +509,16 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
       const view = await card(ctx, items[0]!);
       return t.reply(ctx, view.text, view.markup);
     }
-    const more = webLink(config, `/airports?q=${encodeURIComponent(query)}`);
     await t.reply(
       ctx,
       items.length ? `🔍 「${escape(query)}」的结果` : `没有找到「${escape(query)}」。`,
       listKeyboard(items, [
-        more ? [{ text: '🌐 在网站查看全部', url: more }] : [],
+        miniAppButton(
+          config,
+          '📱 查看全部结果',
+          `search_${Buffer.from(query).toString('base64url')}`,
+          ctx.chat?.type === 'private',
+        ),
         [{ text: '🔍 换个关键词', switch_inline_query_current_chat: query }],
       ]),
     );
@@ -603,7 +610,9 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
     await t.reply(
       ctx,
       items.length ? '🔔 <b>我的关注</b>' : '还没有关注任何机场。',
-      listKeyboard(items),
+      listKeyboard(items, [
+        miniAppButton(config, '📱 全部关注', 'following', ctx.chat?.type === 'private'),
+      ]),
     );
   });
   bot.command('submit', async (ctx) => {
@@ -619,7 +628,12 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
           ],
         ]),
       );
-    if (!ctx.match.trim()) return t.reply(ctx, submitHelp);
+    if (!ctx.match.trim())
+      return t.reply(
+        ctx,
+        submitHelp,
+        markup([miniAppButton(config, '📮 打开投稿表单', 'submit', true)]),
+      );
     const [name, slug, websites, subscription] = ctx.match.split('|').map((s) => s.trim());
     const input = {
       name,
@@ -641,11 +655,10 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
     );
     if (stats!.count >= 5) return t.reply(ctx, '每小时最多投稿 5 次。');
     await createSubmission(db, config, user, prepareProvider(input, config), ctx.update.update_id);
-    const mine = webLink(config, '/me/submissions');
     await t.reply(
       ctx,
       '📮 投稿已提交，审核结果会私信通知你。',
-      mine ? markup([[{ text: '🌐 我的投稿', url: mine }]]) : undefined,
+      markup([miniAppButton(config, '📮 我的投稿', 'submissions', true)]),
     );
   });
 
@@ -787,7 +800,7 @@ function registerReviewHandlers(bot: Bot, db: DB, config: Config, v: Views, t: T
     if (!user)
       await (ctx.callbackQuery
         ? t.answer(ctx, '需要后台审核权限', true)
-        : t.reply(ctx, '需要后台审核权限，请先在网站绑定 Telegram 账号。'));
+        : t.reply(ctx, '需要审核权限。请让管理员按你的 Telegram ID 分配角色。'));
     return user;
   }
   const done = (ctx: Context, label: string) =>
@@ -817,6 +830,23 @@ function registerReviewHandlers(bot: Bot, db: DB, config: Config, v: Views, t: T
     if (!(await reviewer(ctx))) return;
     const view = await v.pending();
     await t.reply(ctx, view.text, view.markup);
+  });
+  bot.command('admin', async (ctx) => {
+    const user = await reviewer(ctx);
+    if (!user) return;
+    await t.reply(
+      ctx,
+      `🗂 <b>${user.role === 'admin' ? '管理员' : '审核员'}工作台</b>`,
+      markup([
+        [{ text: '待处理', callback_data: 'pd' }],
+        miniAppButton(config, '打开管理台', 'admin', true),
+        miniAppButton(config, '异常复核', 'incidents', true),
+        miniAppButton(config, '投稿审核', 'review_submissions', true),
+        ...(user.role === 'admin'
+          ? [miniAppButton(config, '机器人与通报群', 'telegram', true)]
+          : []),
+      ]),
+    );
   });
   bot.callbackQuery('pd', async (ctx) => {
     if (await reviewer(ctx)) await t.show(ctx, await v.pending());
@@ -990,7 +1020,7 @@ function registerReviewHandlers(bot: Bot, db: DB, config: Config, v: Views, t: T
     });
     // Reviewers get their extra commands in this chat's menu.
     await ctx.api
-      .setMyCommands(enabled ? commandMenus.reviewer : commandMenus.private, {
+      .setMyCommands(commandMenus.reviewer, {
         scope: { type: 'chat', chat_id: ctx.from.id },
       })
       .catch(ignore400);

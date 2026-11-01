@@ -6,13 +6,9 @@
 - 较大的条目拆成可以单独合并的子项。
 - 完成的条目在合并 PR 中删除，对外可见的变化记入 [CHANGELOG.md](CHANGELOG.md)。
 
-## 网站
+## 用户入口
 
-- [ ] 建立 `web/`：React 19 + Vite 工程与 pnpm workspace 配置，Fastify 同源提供构建产物，Dockerfile 一并打包。
-- [ ] 机场库：列表、搜索、标签与 `lifecycle` 筛选、详情页、检测记录。
-- [ ] 赛博墓园：墓碑列表、墓志铭、献花 / 点烛 / 上香、追悼留言。
-- [ ] 账号：邮箱注册登录、Telegram 登录与绑定、我的投稿、关注列表。
-- [ ] 投稿表单：官网与订阅入口录入，提示订阅仅用于监测且加密保存。
+用户侧以 Telegram Bot + Mini App 为主，不再扩展独立 Web 用户功能。`web/` 复用为 Mini App 和管理员后台；Bot 负责查询、通知与快捷操作，复杂表单在 TG 内页面完成。
 
 ## 管理后台
 
@@ -24,9 +20,9 @@
 
 ## Telegram
 
-- [ ] Mini App 前端页面，接入 `POST /auth/telegram/miniapp`。
+- [x] Mini App 复用现有页面，接入统一 Telegram 身份、原生返回、安全区和底部导航。
 - [ ] 使用真实 BotFather 配置按 [docs/telegram.md](docs/telegram.md) 联调：webhook、分作用域命令菜单、inline 与 Guest Mode、群内 ephemeral 命令与 15 秒回复时限、`/bind` 与论坛话题通知、按钮复核与 force reply、rich message 检测报告在各客户端的显示。
-- [ ] 审核员角色在后台变更时同步其私聊命令菜单（目前在 `/notify` 与 `telegram:setup` 时更新）。
+- [x] 审核员角色变更通过 outbox 同步私聊命令菜单，独立于通知开关。
 
 ## 检测
 

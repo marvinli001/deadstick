@@ -2,6 +2,8 @@
 
 本文说明 Deadstick 机器人从创建到上线的全部配置：BotFather 设置、环境变量、初始化命令、审核员与通报群绑定、群内与跨聊天的交互方式，以及排错方法。机器人基于 Bot API 10.3（grammY 1.46）。
 
+用户入口以 **Bot + Telegram Mini App** 为主。Bot 承担搜索、状态卡片、关注、通知与快速审核；复杂表单和管理操作复用 `web/` 页面，在 TG 内打开。Mini App 自动验证 Telegram 身份，带底部导航、原生返回与安全区适配，保持项目的浅色视觉。
+
 ## 功能与依赖的配置
 
 | 功能                               | 需要的配置                                                                   |
@@ -26,7 +28,7 @@ API 与 worker 两个进程都要运行：API 接收 webhook 并把更新加密�
 4. `/setinline` 开启 inline mode，占位符建议填 `机场名或 slug`。需要统计分享量时再用 `/setinlinefeedback`。
 5. 在 BotFather 的 Mini App（`/mybots` → 选择机器人 → Bot Settings）中：
    - 开启 **Guest Mode**，让用户在机器人不在的群里 `@机器人 机场名` 查询。
-   - **Configure Mini App** 把 Mini App 地址设为 `PUBLIC_URL`。Bot API 10.2 起默认禁止从其他 origin 调用 Mini App 方法，保持开启即可。
+   - **Configure Mini App** 启用 **Main Mini App**，地址设为 `PUBLIC_URL`。这是群消息与通知里的 `?startapp=` 链接能直接打开 TG 内页面的前提。Bot API 10.2 起默认禁止从其他 origin 调用 Mini App 方法，保持开启即可。
 6. 网站登录：在 BotFather 的 **Login Widget / Web Login** 设置里取得 OIDC Client ID 和 Client Secret，登记精确回调 `${PUBLIC_URL}/auth/telegram/callback` 和网站 origin。Client Secret 与 bot token 是两个不同的值。
 7. 不需要开启 Business（Secretary Mode）、Payments、Bot-to-Bot Communication 或 Managed Bots。机器人会持久化这些更新，但没有对应的业务流程；需要时通过管理员的完整 Bot API 入口操作。
 
@@ -42,6 +44,7 @@ API 与 worker 两个进程都要运行：API 接收 webhook 并把更新加密�
 | `TELEGRAM_CLIENT_ID`      | OIDC Client ID，和 `TELEGRAM_CLIENT_SECRET` 必须同时设置。                                |
 | `TELEGRAM_CLIENT_SECRET`  | OIDC Client Secret。                                                                      |
 | `PUBLIC_URL`              | 网站与 API 的公网 HTTPS origin。webhook、Mini App 和消息里的网站按钮都使用它。            |
+| `ADMIN_TELEGRAM_ID`       | 仅由 `pnpm admin` 读取，按 Telegram 数字用户 ID 创建或提升管理员，不需要邮箱密码。        |
 
 生成 webhook secret：
 
@@ -64,7 +67,7 @@ docker compose run --rm api node dist/telegram/setup.js
 命令依次完成：
 
 - 用 `getMe` 核对 `TELEGRAM_BOT_USERNAME`。
-- 按作用域设置命令菜单：私聊（`default`、`all_private_chats`）、所有群（`all_group_chats`，个人类命令带 `is_ephemeral`）、群管理员（`all_chat_administrators`，额外显示 `/bind`、`/unbind`），以及每位已开启复核私信的审核员（`chat` 作用域，额外显示 `/pending`、`/notify`、`/review`）。
+- 按作用域设置命令菜单：私聊（`default`、`all_private_chats`）、所有群（`all_group_chats`，个人类命令带 `is_ephemeral`）、群管理员（`all_chat_administrators`，额外显示 `/bind`、`/unbind`），以及每位绑定 Telegram 的审核员（`chat` 作用域，额外显示 `/admin`、`/pending`、`/notify`、`/review`）。审核菜单不依赖私信通知开关。
 - 设置简介、短简介，把聊天菜单按钮设为打开 `PUBLIC_URL` 的 Mini App。
 - 设置 webhook `${PUBLIC_URL}/telegram/webhook`，订阅全部更新类型，不丢弃积压。
 - 输出 JSON 报告：
@@ -85,9 +88,11 @@ docker compose run --rm api node dist/telegram/setup.js
 
 ## 4. 审核员接收复核私信
 
-1. 在网站以审核员或管理员身份登录，通过“绑定 Telegram”（`POST /auth/telegram/link`）关联账号。
-2. 私聊机器人点 **Start**。
-3. 发送 `/notify`，点 **开启**。此后异常复核、新投稿、待审留言都会私信给你，菜单里也会出现审核命令。点 **关闭** 停止。
+1. 管理员在服务器的环境变量设置自己的 `ADMIN_TELEGRAM_ID`，运行 `pnpm admin`。已有邮箱管理员也可通过“绑定 Telegram”（`POST /auth/telegram/link`）关联身份，账号不会按昵称或邮箱自动合并。
+2. 私聊机器人点 **Start**，发送 `/admin` 打开 Mini App 管理台。其他用户先打开 Bot 或 Mini App，由管理员在「用户」里按 Telegram ID 分配角色。
+3. Mini App「我的」点 **接收 Bot 私信**，开启 **审核待办私信**；也可私聊 `/notify` 点 **开启**。异常复核、新投稿、待审留言都会私信给你。关闭通知不会移除审核命令。
+
+后台修改角色或停用账号后，命令菜单通过 outbox 同步，发送时重新读取当前角色；权限判断立即生效。`/start` 和 `/app` 也会刷新当前私聊的角色菜单。`GET/PUT /admin/telegram/notifications` 只管理当前审核员自己的通知开关，写入需要登录和 CSRF。
 
 管理员也可以调用 `PUT /admin/telegram/chats/{Telegram用户ID}`，`{"kind":"admin","enabled":true}` 代为开启。接口会核对该 Telegram 账号当前是否属于审核员。账号被降级或停用后，私信与按钮操作都会立即失效，因为每次操作都按数据库里的当前角色判断。
 
@@ -112,6 +117,9 @@ docker compose run --rm api node dist/telegram/setup.js
 | 命令                                   | 范围     | 说明                                                             |
 | -------------------------------------- | -------- | ---------------------------------------------------------------- |
 | `/start`                               | 私聊     | 欢迎卡片、Telegram ID、搜索 / 墓园 / Mini App 按钮；处理深链参数 |
+| `/app`                                 | 私聊     | 打开 Mini App，刷新角色命令菜单                                  |
+| `/me`                                  | 私聊     | 我的关注、投稿与账号入口                                         |
+| `/admin`                               | 审核员   | Telegram 内管理台、异常、投稿审核；管理员另有机器人设置入口      |
 | `/help`                                | 全部     | 命令说明                                                         |
 | `/search 名称`                         | 全部     | 结果列表按钮；只有一个结果时直接显示卡片                         |
 | `/status slug`                         | 全部     | 机场卡片：状态、最近检测、墓志铭、祭奠数，以及操作按钮           |
@@ -146,11 +154,15 @@ docker compose run --rm api node dist/telegram/setup.js
 
 `<id>` 是去掉连字符的机场 UUID（32 位十六进制），网站可以直接拼出这些链接。
 
+Mini App 主应用链接使用 `https://t.me/<bot>?startapp=<目标>`。目标支持 `airports`、`graveyard`、`submit`、`following`、`submissions`、`me`、`admin`、`incidents`、`review_submissions`、`memorials`、`telegram`，以及 `p_<id>`（机场详情）。未知目标不会作为 URL 跳转；管理路由始终重新校验角色。私聊按钮使用 `web_app`，群消息、inline 卡片和通知使用 `startapp` 链接，避免跳到外部浏览器。
+
+搜索结果使用 `search_<UTF-8 关键词的 base64url>` 目标，保留筛选关键词；内容仅作为站内搜索参数使用。
+
 ### Inline、Guest 与 Mini App
 
 - **Inline mode**：在任意聊天输入 `@机器人 关键词`，结果可翻页，已入土的机场排在前面。已入土的卡片带祭奠按钮，计数在原消息上实时刷新；其他卡片只带链接按钮。
 - **Guest mode**：在机器人不在的群里发送 `@机器人 机场名`，机器人以自己的身份回复一张只读卡片，只带链接按钮。它看不到群里的其他消息，也不会因此加入白名单。
-- **Mini App**：菜单按钮和私聊欢迎卡片打开 `PUBLIC_URL`，前端用 `POST /auth/telegram/miniapp` 提交 `initData` 登录。
+- **Mini App**：菜单按钮和欢迎卡片打开 TG 内页面，前端加载 Telegram 官方 WebApp SDK，提交原始 `initData` 给 `POST /auth/telegram/miniapp` 验签登录，不需要再注册邮箱。凭据从地址栏移除，开发模式也只提交一次。首次登录要求凭据 5 分钟内签发；同账号持有有效会话与 CSRF 时可恢复同次启动，无有效会话的重复登录会被拒绝。登录失败会停在错误页，不会沿用另一个浏览器账号。
 
 ### 消息格式
 

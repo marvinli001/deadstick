@@ -1,6 +1,6 @@
 # Deadstick
 
-机场存活监测、人工复核、Telegram 通报与赛博墓园。前端通过 REST API 接入，交互文档位于 `/docs`，OpenAPI 位于 `/openapi.json`。
+机场存活监测、人工复核、Telegram 通报与赛博墓园。用户入口为 **Telegram Bot + Mini App**：Bot 提供查询、通知与快捷操作，投稿、详情与管理操作在 Telegram 内的 Mini App 完成。`web/` 为 Mini App 与管理员后台共用的前端，不再扩展独立用户网站。交互文档位于 `/docs`，OpenAPI 位于 `/openapi.json`。
 
 ## 已实现
 
@@ -30,15 +30,14 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 
 ```sh
 pnpm migrate
-# 在 .env 设置 ADMIN_EMAIL 和至少 12 位的 ADMIN_PASSWORD
+# 在 .env 设置 ADMIN_TELEGRAM_ID（你的 Telegram 数字用户 ID）
 pnpm admin
-# 随后从 .env 移除 ADMIN_PASSWORD
 pnpm dev
 # 另一个终端；API 和 worker 两个进程都必须运行
 pnpm dev:worker
 ```
 
-`pnpm admin` 也可对已有邮箱提升管理员权限或重设其密码，会撤销该用户已有会话。公开注册永远不会自动分配管理员。
+`pnpm admin` 按 `ADMIN_TELEGRAM_ID` 创建或提升管理员，随后从该 Telegram 账号打开 Mini App 即可进入管理台，无需邮箱密码。已有 Bot 用户会保留关注与投稿。也可留空该变量，改用 `ADMIN_EMAIL` + `ADMIN_PASSWORD` 初始化邮箱管理员，完成后移除密码。两种方式均会撤销该账号已有会话，公开登录永远不会自动分配管理员。
 
 ## Docker 部署
 
@@ -59,15 +58,15 @@ Compose 包含 PostgreSQL、一次性迁移、API、worker。数据库没有暴�
 
 完整步骤、命令、深链、通知类型与排错见 [docs/telegram.md](docs/telegram.md)。最短路径：
 
-1. 在 [BotFather](https://t.me/BotFather) 创建机器人，填写 `TELEGRAM_BOT_TOKEN`、`TELEGRAM_BOT_USERNAME`，生成 `TELEGRAM_WEBHOOK_SECRET`；开启 inline mode 与 Guest Mode，Mini App 地址设为 `PUBLIC_URL`。
-2. 网站登录需要 BotFather Login Widget 的 `TELEGRAM_CLIENT_ID`、`TELEGRAM_CLIENT_SECRET`，并登记回调 `${PUBLIC_URL}/auth/telegram/callback`。
+1. 在 [BotFather](https://t.me/BotFather) 创建机器人，填写 `TELEGRAM_BOT_TOKEN`、`TELEGRAM_BOT_USERNAME`，生成 `TELEGRAM_WEBHOOK_SECRET`；开启 inline mode、Guest Mode 和 **Main Mini App**，地址设为 `PUBLIC_URL`。
+2. Mini App 使用 Bot token 验签并自动登录，不需要 OIDC 凭据。管理员从外部浏览器登录时，可另配 BotFather Login Widget 的 `TELEGRAM_CLIENT_ID`、`TELEGRAM_CLIENT_SECRET`，登记回调 `${PUBLIC_URL}/auth/telegram/callback`。
 3. API 和 worker 上线后运行 `pnpm telegram:setup`（容器内 `docker compose run --rm api node dist/telegram/setup.js`），按输出的 `hints` 补齐 BotFather 设置。
-4. 审核员在网站绑定 Telegram，私聊机器人点 Start，发送 `/notify` 开启复核私信。
+4. 用 `ADMIN_TELEGRAM_ID` 初始化管理员，私聊机器人点 Start，发送 `/admin` 打开管理台。在 Mini App「我的」开启 Bot 私信与审核待办私信；也可使用 `/notify`。其他用户先打开 Bot 或 Mini App，再由管理员按 Telegram ID 分配审核角色。
 5. 把机器人加入群，管理员点私信里的“绑定为通报群”，或在群（论坛话题）里发送 `/bind`。
 
 邮箱和 Telegram 是独立身份；系统不会根据昵称合并账号。一个 Telegram 已经属于另一个账号时，绑定返回冲突；可用 Telegram 登录原账号，由管理员给该账号分配审核权限。关闭 Telegram 配置时，普通 REST API 和监测仍可独立使用。
 
-OIDC 登录流程：`GET /auth/telegram/start` 获得授权 URL → 浏览器打开 URL → 回调校验签名、issuer、audience、nonce、state、PKCE → 返回用户信息和会话 cookie。账号绑定使用已登录的 `POST /auth/telegram/link` 发起相同流程。Mini App 使用 `POST /auth/telegram/miniapp` 提交原始 `initData`，有效期 5 分钟且每份只能使用一次。
+OIDC 登录流程：`GET /auth/telegram/start?next=/console` 获得授权 URL → 浏览器打开 URL → 回调校验签名、issuer、audience、nonce、state、PKCE → 返回用户信息和会话 cookie，并回到站内目标页面。账号绑定使用已登录的 `POST /auth/telegram/link` 发起相同流程。Mini App 使用 `POST /auth/telegram/miniapp` 提交原始 `initData`，首次登录要求 5 分钟内签发，每份仅能创建一次会话；持有同账号有效会话和 CSRF 的页面可恢复该次启动。无有效会话时重复使用或重排同一凭据都会被拒绝。Bot、Mini App 与 OIDC 按 Telegram 用户 ID 对应同一账号。
 已绑定 Telegram 且设置了邮箱密码的账号可以用 `DELETE /auth/telegram` 解绑；只有 Telegram 一种登录方式时返回 `LAST_LOGIN_METHOD`。
 
 ## 前端接入
@@ -89,6 +88,7 @@ OIDC 登录流程：`GET /auth/telegram/start` 获得授权 URL → 浏览器打
 | 设置 / 心跳 / 通知 / 审计         | `/admin/settings/monitor`、`/admin/health`、`/admin/notifications`、`/admin/audit`                                                     |
 | 用户角色 / 留言审核               | `/admin/users?q=&role=`、`/admin/memorials?status=`                                                                                    |
 | 机器人绑定 / 完整 API / 事件      | `/admin/telegram/chats`、`/admin/telegram/api/:method`、`/admin/telegram/updates`                                                      |
+| Telegram 配置 / 个人审核私信      | `GET /auth/telegram/config`、`GET/PUT /admin/telegram/notifications`（审核员管理自己的待办私信）                                       |
 
 `GET /providers`、`GET /graveyard`、`GET /admin/providers` 返回 `{ items, total, limit, offset }`。机场详情额外返回 `follower_count`、`memorial_count` 和 `following`（未登录为 `null`）。`GET /auth/me` 的 `user` 带 `has_password`，前端据此决定是否允许解绑 Telegram。
 

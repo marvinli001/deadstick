@@ -1,15 +1,17 @@
 import type { DB } from '../db.js';
 import type { Config } from '../config.js';
 import type { InlineKeyboardMarkup } from 'grammy/types';
+import { commandsFor } from './commands.js';
 import {
   clip,
   compactId,
   escape,
   markup,
+  miniAppLink,
+  miniAppButton,
   reviewKeyboard,
   startLink,
   tributeRow,
-  webLink,
 } from './format.js';
 
 export async function enqueue(
@@ -112,9 +114,9 @@ export interface ProviderRef {
 }
 const headline = (p: ProviderRef) => `${escape(p.name)} · <code>${escape(p.slug)}</code>`;
 const detailUrl = (config: Config, p: ProviderRef) =>
-  webLink(config, `/airports/${encodeURIComponent(p.slug)}`) ??
+  miniAppLink(config, `p_${compactId(p.id)}`) ??
   startLink(config.botUsername, `p_${compactId(p.id)}`);
-const detailRow = (config: Config, p: ProviderRef, text = '🌐 详情') => {
+const detailRow = (config: Config, p: ProviderRef, text = '📱 详情') => {
   const href = detailUrl(config, p);
   return href ? [{ text, url: href }] : [];
 };
@@ -199,7 +201,6 @@ export async function notifySubmission(
     author: string;
   },
 ) {
-  const consoleUrl = webLink(config, '/console');
   await notifyReviewers(db, `submission:${submission.id}`, `submission:${submission.id}`, {
     text: [
       '📮 <b>新投稿待审核</b>',
@@ -213,7 +214,7 @@ export async function notifySubmission(
         { text: '✅ 通过', callback_data: `sb:a:${submission.id}`, style: 'success' },
         { text: '❌ 驳回', callback_data: `sb:r:${submission.id}`, style: 'danger' },
       ],
-      consoleUrl ? [{ text: '🗂 后台审核', url: consoleUrl }] : [],
+      miniAppButton(config, '🗂 打开审核台', 'review_submissions'),
     ]),
   });
 }
@@ -304,9 +305,19 @@ export async function dispatchNotifications(db: DB, sender: TelegramSender, limi
   // Sequential delivery keeps each worker comfortably below Telegram's global rate limit.
   for (const n of rows) {
     try {
+      let parameters: Record<string, unknown> = { ...n.payload, chat_id: n.chat_id };
+      if (n.method === 'setMyCommands') {
+        const [user] = await db.query<{ role: string; disabled: boolean }>(
+          'SELECT role,disabled FROM users WHERE telegram_id=$1',
+          [n.chat_id],
+        );
+        parameters = {
+          scope: { type: 'chat', chat_id: n.chat_id },
+          commands: commandsFor(user?.role, user?.disabled),
+        };
+      }
       const result = await sender.send(n.method, {
-        ...n.payload,
-        chat_id: n.chat_id,
+        ...parameters,
         ...(n.topic_id && n.method === 'sendMessage' ? { message_thread_id: n.topic_id } : {}),
       });
       const messageId =

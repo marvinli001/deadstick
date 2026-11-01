@@ -33,8 +33,8 @@ export async function newSession(db: DB, config: Config, reply: FastifyReply, us
   if (user.disabled) throw new AppError(403, 'DISABLED', 'Account disabled');
   const session = token(),
     csrfToken = token();
-  await db.query(
-    "INSERT INTO sessions(token_hash,user_id,csrf_token,expires_at) VALUES ($1,$2,$3,now()+interval '30 days')",
+  const [row] = await db.query<{ has_password: boolean }>(
+    "INSERT INTO sessions(token_hash,user_id,csrf_token,expires_at) VALUES ($1,$2,$3,now()+interval '30 days') RETURNING (SELECT password_hash IS NOT NULL FROM users WHERE id=$2) AS has_password",
     [digest(session), user.id, csrfToken],
   );
   reply.setCookie('session', session, {
@@ -45,7 +45,7 @@ export async function newSession(db: DB, config: Config, reply: FastifyReply, us
     maxAge: 30 * 86400,
   });
   reply.header('Cache-Control', 'no-store');
-  return { user: publicUser(user), csrfToken };
+  return { user: { ...publicUser(user), has_password: row!.has_password }, csrfToken };
 }
 export function authHook(db: DB, config: Config) {
   return async (request: FastifyRequest) => {

@@ -1,10 +1,12 @@
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router';
-import { LayoutDashboard, Search, UserRound } from 'lucide-react';
+import { LayoutDashboard, Search, UserRound, Plane, Flower2, Send } from 'lucide-react';
 import { UserMenu } from '@/components/arc/user-menu/user-menu';
 import { useToastStack } from '@/components/arc/toast-stack/toast-stack';
 import { errorText } from '@/lib/api';
 import { isReviewer, useSession } from '@/lib/session';
 import { Wordmark } from './art';
+import { TelegramNavigation } from './TelegramNavigation';
+import { isMiniApp } from '@/lib/telegram';
 import styles from './PublicLayout.module.css';
 
 const nav = [
@@ -26,6 +28,12 @@ export function AccountControl() {
         to={`/login?next=${encodeURIComponent(location.pathname + location.search)}`}
       >
         登录
+      </Link>
+    );
+  if (isMiniApp)
+    return (
+      <Link to="/me" className={styles.signIn}>
+        {user.display_name}
       </Link>
     );
   return (
@@ -64,6 +72,32 @@ export function AccountControl() {
 }
 
 export function PublicLayout() {
+  if (isMiniApp)
+    return (
+      <div className={styles.miniPage}>
+        <TelegramNavigation />
+        <main className={styles.main}>
+          <Outlet />
+        </main>
+        <nav className={styles.tabs} aria-label="主导航">
+          {[
+            { to: '/airports', label: '机场', Icon: Plane },
+            { to: '/cemetery', label: '墓园', Icon: Flower2 },
+            { to: '/submit', label: '投稿', Icon: Send },
+            { to: '/me', label: '我的', Icon: UserRound },
+          ].map(({ to, label, Icon }) => (
+            <NavLink
+              key={to}
+              to={to}
+              className={({ isActive }) => (isActive ? styles.selected : undefined)}
+            >
+              <Icon size={20} strokeWidth={1.75} aria-hidden="true" />
+              <span>{label}</span>
+            </NavLink>
+          ))}
+        </nav>
+      </div>
+    );
   return (
     <div className={styles.page}>
       <div className={styles.frame} aria-hidden="true" />

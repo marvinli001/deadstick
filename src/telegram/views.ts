@@ -11,12 +11,14 @@ import {
   expandId,
   listKeyboard,
   markup,
+  miniAppButton,
+  miniAppLink,
+  compactId,
   providerCard,
   providerKeyboard,
   providerViewSql,
   reviewKeyboard,
   time,
-  webLink,
   type CheckRun,
   type ProviderView,
 } from './format.js';
@@ -95,7 +97,6 @@ export function views(db: DB, config: Config) {
       const total = stats!.total,
         pages = Math.max(1, Math.ceil(total / PAGE)),
         page = Math.floor(offset / PAGE) + 1;
-      const cemetery = webLink(config, '/cemetery');
       return {
         text: total
           ? `🪦 <b>赛博墓园</b>\n${total} 座墓碑 · 第 ${page}/${pages} 页`
@@ -109,7 +110,7 @@ export function views(db: DB, config: Config) {
               ? [{ text: '下一页 ›', callback_data: `gy:${offset + PAGE}` }]
               : []),
           ],
-          cemetery ? [{ text: '🌐 网页版墓园', url: cemetery }] : [],
+          miniAppButton(config, '📱 打开墓园', 'graveyard'),
         ]),
         start: 'graveyard',
       };
@@ -124,7 +125,6 @@ export function views(db: DB, config: Config) {
         ),
       ]);
       const c = counts!;
-      const consoleUrl = webLink(config, '/console');
       return {
         text: `🗂 <b>待处理</b>\n异常事件 ${c.incidents} · 投稿 ${c.submissions} · 追悼留言 ${c.memorials}`,
         markup: markup([
@@ -135,10 +135,7 @@ export function views(db: DB, config: Config) {
             ...(c.submissions ? [{ text: `📮 投稿 ${c.submissions}`, callback_data: 'ps:0' }] : []),
             ...(c.memorials ? [{ text: `🕯 留言 ${c.memorials}`, callback_data: 'pm:0' }] : []),
           ],
-          [
-            { text: '🔄 刷新', callback_data: 'pd' },
-            ...(consoleUrl ? [{ text: '🗂 后台', url: consoleUrl }] : []),
-          ],
+          [{ text: '🔄 刷新', callback_data: 'pd' }, ...miniAppButton(config, '🗂 管理台', 'admin')],
         ]),
         start: 'pending',
       };
@@ -162,7 +159,7 @@ export function views(db: DB, config: Config) {
           `发起：${time(row.created_at)}`,
         ].join('\n'),
         markup: open
-          ? reviewKeyboard(row.id, webLink(config, `/airports/${encodeURIComponent(p.slug)}`))
+          ? reviewKeyboard(row.id, miniAppLink(config, `p_${compactId(p.id)}`))
           : markup([[{ text: '‹ 待处理', callback_data: 'pd' }]]),
         start: 'pending',
       };

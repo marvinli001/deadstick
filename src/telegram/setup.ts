@@ -1,6 +1,7 @@
 import { loadConfig } from '../config.js';
 import { database } from '../db.js';
-import { allowedUpdates, commandMenus } from './bot.js';
+import { allowedUpdates } from './bot.js';
+import { commandMenus } from './commands.js';
 import { telegramSender } from './notifications.js';
 
 const config = loadConfig();
@@ -29,9 +30,9 @@ const { db, close } = database(config.databaseUrl);
 let reviewers = 0,
   unreachable = 0;
 try {
-  // Reviewers who enabled DM alerts also see /pending, /notify and /review in their menu.
+  // Command access follows the role, independently of notification preferences.
   for (const chat of await db.query<{ id: string }>(
-    "SELECT c.id FROM telegram_chats c JOIN users u ON u.telegram_id=c.id WHERE c.kind='admin' AND c.enabled AND u.role IN ('admin','moderator') AND NOT u.disabled",
+    "SELECT telegram_id AS id FROM users WHERE telegram_id IS NOT NULL AND role IN ('admin','moderator') AND NOT disabled",
   )) {
     // A reviewer who never pressed Start makes Telegram reject the chat scope.
     await sender
@@ -55,7 +56,7 @@ await sender.send('setMyShortDescription', {
   short_description: '机场存活观察 · 人工复核 · 赛博墓园',
 });
 await sender.send('setChatMenuButton', {
-  menu_button: { type: 'web_app', text: '墓园', web_app: { url: config.publicUrl } },
+  menu_button: { type: 'web_app', text: 'Deadstick', web_app: { url: config.publicUrl } },
 });
 await sender.send('setWebhook', {
   url: `${config.publicUrl}/telegram/webhook`,
@@ -72,6 +73,8 @@ const webhook = (await sender.send('getWebhookInfo', {})) as {
 const hints = [
   !me.supports_inline_queries && 'Inline mode is off: BotFather > /setinline',
   !me.supports_guest_queries && 'Guest mode is off: BotFather Mini App > Bot Settings > Guest Mode',
+  !me.has_main_web_app &&
+    'Main Mini App is off: BotFather > Configure Mini App; set its URL to PUBLIC_URL for startapp links',
   !me.can_join_groups && 'Groups are disabled: BotFather > /setjoingroups',
   me.can_read_all_group_messages &&
     'Privacy mode is off; turn it on unless you need every group message',

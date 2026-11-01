@@ -62,7 +62,7 @@
 - 列表接口使用 `limit`（1–100）与 `offset` 分页。
 - SQL 一律使用 `$1` 参数化，不拼接用户输入。多条写操作放进 `db.transaction`。
 - 管理与审核写操作调用 `audit()` 记录操作者、动作与目标，`details` 中不得包含凭据。
-- Telegram 新命令在 `src/telegram/bot.ts` 实现并加入 `commandTable`（标明可见范围与是否 ephemeral）；消息文本与按钮放在 `src/telegram/format.ts`、`src/telegram/views.ts`，通知放在 `src/telegram/notifications.ts`。新增更新类型加入 `allowedUpdates`，部署后重新运行 `pnpm telegram:setup`。机器人配置变化同步更新 [docs/telegram.md](docs/telegram.md)。
+- Telegram 新命令在 `src/telegram/bot.ts` 实现并加入 `src/telegram/commands.ts` 的 `commandTable`（标明可见范围与是否 ephemeral）；消息文本与按钮放在 `src/telegram/format.ts`、`src/telegram/views.ts`，通知放在 `src/telegram/notifications.ts`。新增更新类型加入 `allowedUpdates`，部署后重新运行 `pnpm telegram:setup`。机器人配置变化同步更新 [docs/telegram.md](docs/telegram.md)。
 - 新增依赖需在 PR 中说明用途；需要安装脚本的依赖须加入 `pnpm-workspace.yaml` 的 `allowBuilds` 并经审查。始终提交更新后的 `pnpm-lock.yaml`。
 
 ## 数据库迁移

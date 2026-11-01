@@ -44,6 +44,9 @@ describe('web and API on one origin', () => {
       "frame-ancestors 'self' https://web.telegram.org",
     );
     expect(page.headers['x-frame-options']).toBeUndefined();
+    expect(page.headers['content-security-policy']).toContain(
+      "script-src 'self' https://telegram.org",
+    );
     const head = await app.inject({
       method: 'HEAD',
       url: '/airports/example',

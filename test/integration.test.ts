@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { beforeAll, beforeEach, afterAll, describe, it, expect, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
@@ -15,6 +15,7 @@ import {
   addTribute,
 } from '../src/catalog/service.js';
 import { telegramUser } from '../src/auth/service.js';
+import { bootstrapAdmin } from '../src/auth/bootstrap.js';
 import { createBot, processBotUpdates } from '../src/telegram/bot.js';
 import { dispatchNotifications, enqueue, TelegramError } from '../src/telegram/notifications.js';
 import type { CheckEndpoint } from '../src/monitor/check.js';
@@ -30,7 +31,10 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
   });
   const dbName = `deadstick_it_${randomBytes(6).toString('hex')}`;
   const sender = {
-    send: vi.fn(async () => ({ type: 'supergroup', title: 'Test group' }) as unknown),
+    send: vi.fn(
+      async (_method: string, _parameters: Record<string, unknown>) =>
+        ({ type: 'supergroup', title: 'Test group' }) as unknown,
+    ),
   };
   let adminId: string, userId: string, passwordHash: string;
   const admin = { cookie: 'session=admin-token', 'x-csrf-token': 'admin-csrf' };
@@ -450,6 +454,210 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       'already linked',
     );
   });
+  const miniData = (id: number, age = 0) => {
+    const params = new URLSearchParams({
+      auth_date: String(Math.floor(Date.now() / 1000) - age),
+      user: JSON.stringify({ id, first_name: 'Telegram' }),
+      query_id: randomUUID(),
+    });
+    const check = [...params.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${k}=${v}`)
+      .join('\n');
+    const secret = createHmac('sha256', 'WebAppData').update(config.botToken!).digest();
+    params.set('hash', createHmac('sha256', secret).update(check).digest('hex'));
+    return params.toString();
+  };
+  it('unifies Bot and Mini App identities, resumes only with the original account session, and blocks replay', async () => {
+    const botUser = await telegramUser(storage.db, { id: '42', name: 'Telegram' });
+    const initData = miniData(42);
+    const login = await app.inject({
+      method: 'POST',
+      url: '/auth/telegram/miniapp',
+      payload: { initData },
+    });
+    expect(login.statusCode, login.body).toBe(200);
+    expect(login.json().user).toMatchObject({ id: botUser.id, role: 'user', has_password: false });
+    const session = login.cookies.find((c) => c.name === 'session')!.value;
+    const headers = { cookie: `session=${session}`, 'x-csrf-token': login.json().csrfToken };
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/auth/telegram/miniapp',
+          headers,
+          payload: { initData },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const reordered = [...new URLSearchParams(initData).entries()].reverse();
+    const replay = await app.inject({
+      method: 'POST',
+      url: '/auth/telegram/miniapp',
+      payload: { initData: new URLSearchParams(reordered).toString() },
+    });
+    expect(replay.json().error.code).toBe('REPLAY');
+    const stolen = await app.inject({
+      method: 'POST',
+      url: '/auth/telegram/miniapp',
+      headers: member,
+      payload: { initData },
+    });
+    expect(stolen.json().error.code).toBe('REPLAY');
+    const tampered = new URLSearchParams(initData);
+    tampered.set('user', JSON.stringify({ id: 100, first_name: 'Admin' }));
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/auth/telegram/miniapp',
+          headers,
+          payload: { initData: tampered.toString() },
+        })
+      ).json().error.code,
+    ).toBe('TELEGRAM_AUTH');
+    await storage.db.query('UPDATE users SET disabled=true WHERE id=$1', [botUser.id]);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/auth/telegram/miniapp',
+          headers,
+          payload: { initData },
+        })
+      ).statusCode,
+    ).toBe(403);
+  });
+  it('does not replace an existing account with expired or forged Mini App credentials', async () => {
+    const expired = await app.inject({
+      method: 'POST',
+      url: '/auth/telegram/miniapp',
+      headers: admin,
+      payload: { initData: miniData(42, 600) },
+    });
+    expect(expired.json().error.code).toBe('TELEGRAM_AUTH');
+    expect((await app.inject({ url: '/auth/me', headers: admin })).json().user.id).toBe(adminId);
+    const login = await app.inject({
+      method: 'POST',
+      url: '/auth/telegram/miniapp',
+      headers: admin,
+      payload: { initData: miniData(42) },
+    });
+    expect(login.json().user.role).toBe('user');
+    expect(login.json().user.telegram_id).toBe('42');
+  });
+  it('bootstraps a Telegram administrator without email and preserves the existing Telegram identity', async () => {
+    const user = await telegramUser(storage.db, { id: '42', name: 'Original' });
+    await bootstrapAdmin(storage.db, { ADMIN_TELEGRAM_ID: '42' });
+    const [promoted] = await storage.db.query(
+      'SELECT id,email,role,display_name FROM users WHERE telegram_id=$1',
+      ['42'],
+    );
+    expect(promoted).toEqual({ id: user.id, email: null, role: 'admin', display_name: 'Original' });
+    const login = await app.inject({
+      method: 'POST',
+      url: '/auth/telegram/miniapp',
+      payload: { initData: miniData(42) },
+    });
+    const cookie = `session=${login.cookies.find((c) => c.name === 'session')!.value}`;
+    expect((await app.inject({ url: '/admin/users', headers: { cookie } })).statusCode).toBe(200);
+    await bootstrapAdmin(storage.db, { ADMIN_TELEGRAM_ID: '42' });
+    expect((await app.inject({ url: '/auth/me', headers: { cookie } })).statusCode).toBe(401);
+    await expect(bootstrapAdmin(storage.db, { ADMIN_TELEGRAM_ID: '-100' })).rejects.toThrow(
+      'positive',
+    );
+    await expect(
+      bootstrapAdmin(storage.db, { ADMIN_TELEGRAM_ID: '42', ADMIN_EMAIL: 'someone@example.com' }),
+    ).rejects.toThrow('not both');
+  });
+  it('rejects external OIDC return destinations and persists the admin destination', async () => {
+    const oidc = await buildApp(
+      storage.db,
+      { ...config, telegramClientId: '123', telegramClientSecret: 'test-secret' },
+      { logger: false, sender },
+    );
+    try {
+      for (const next of ['//evil.example', '/\\evil.example', 'https://evil.example'])
+        expect(
+          (await oidc.inject({ url: `/auth/telegram/start?next=${encodeURIComponent(next)}` }))
+            .statusCode,
+        ).toBe(400);
+      const response = await oidc.inject({
+        url: '/auth/telegram/start?next=%2Fconsole%2Fincidents',
+      });
+      expect(response.statusCode).toBe(200);
+      const state = new URL(response.json().url).searchParams.get('state')!;
+      expect(
+        (
+          await storage.db.query('SELECT return_path FROM auth_challenges WHERE state_hash=$1', [
+            digest(state),
+          ])
+        )[0]!.return_path,
+      ).toBe('/console/incidents');
+    } finally {
+      await oidc.close();
+    }
+  });
+  it('manages review notifications from Mini App with current reviewer permissions', async () => {
+    expect(
+      (
+        await app.inject({
+          method: 'PUT',
+          url: '/admin/telegram/notifications',
+          headers: member,
+          payload: { enabled: true },
+        })
+      ).statusCode,
+    ).toBe(403);
+    expect(
+      (
+        await app.inject({
+          method: 'PUT',
+          url: '/admin/telegram/notifications',
+          headers: admin,
+          payload: { enabled: true },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (await app.inject({ url: '/admin/telegram/notifications', headers: admin })).json(),
+    ).toEqual({ enabled: true });
+    await app.inject({
+      method: 'PUT',
+      url: '/admin/telegram/notifications',
+      headers: admin,
+      payload: { enabled: false },
+    });
+    expect(
+      (await storage.db.query("SELECT enabled FROM telegram_chats WHERE id='100'"))[0]!.enabled,
+    ).toBe(false);
+  });
+  it('queues role command menus and resolves the latest role at delivery time', async () => {
+    await storage.db.query("UPDATE users SET telegram_id='42' WHERE id=$1", [userId]);
+    for (const role of ['moderator', 'user'])
+      expect(
+        (
+          await app.inject({
+            method: 'PATCH',
+            url: `/admin/users/${userId}`,
+            headers: admin,
+            payload: { role, disabled: false },
+          })
+        ).statusCode,
+      ).toBe(200);
+    await dispatchNotifications(storage.db, sender);
+    const menus = sender.send.mock.calls.filter(
+      (c) => c[0] === 'setMyCommands',
+    ) as unknown as Array<
+      [string, { commands: Array<{ command: string }>; scope: unknown; chat_id?: string }]
+    >;
+    expect(menus).toHaveLength(2);
+    for (const [, payload] of menus) {
+      expect(payload.scope).toEqual({ type: 'chat', chat_id: '42' });
+      expect(payload.chat_id).toBeUndefined();
+      expect(payload.commands.some((c) => c.command === 'admin')).toBe(false);
+    }
+  });
   it('retries notification rate limits and honors Telegram forum topics', async () => {
     await enqueue(storage.db, 'key', '-100123', { text: 'Test' }, 9);
     await enqueue(storage.db, 'key', '-100123', { text: 'Test' }, 9);
@@ -571,8 +779,8 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
     expect(Object.keys(response.json().paths).length).toBeGreaterThan(35);
     expect((await app.inject({ url: '/health/ready' })).json()).toEqual({ ok: true });
   });
-  function testBot() {
-    const bot = createBot(storage.db, config, {
+  function testBot(botConfig = config) {
+    const bot = createBot(storage.db, botConfig, {
       id: 123,
       is_bot: true,
       first_name: 'Deadstick',
@@ -634,6 +842,23 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       data,
       message: { message_id: 7, date: 1, chat: privateChat(from), text: 'card' },
     },
+  });
+  it('opens role-aware Mini App entry points without exposing admin controls to ordinary users', async () => {
+    const { bot, calls } = testBot({
+      ...config,
+      publicUrl: 'https://deadstick.example',
+      botUsername: 'deadstick_test_bot',
+    });
+    await bot.handleUpdate(text(1, tester, '/start') as never);
+    const menu = calls.find((c) => c.method === 'setMyCommands')!;
+    expect(JSON.stringify(menu.payload)).not.toContain('"command":"admin"');
+    calls.length = 0;
+    await bot.handleUpdate(text(2, reviewerUser, '/admin') as never);
+    expect(JSON.stringify(calls)).toContain('tgWebAppStartParam=admin');
+    expect(JSON.stringify(calls)).toContain('tgWebAppStartParam=telegram');
+    calls.length = 0;
+    await bot.handleUpdate(text(3, tester, '/admin') as never);
+    expect(JSON.stringify(calls)).not.toContain('tgWebAppStartParam=admin');
   });
   it('answers ephemeral group commands privately and escapes catalog HTML', async () => {
     const p = await provider();

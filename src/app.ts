@@ -60,6 +60,7 @@ export async function buildApp(
     frameguard: false,
     contentSecurityPolicy: {
       directives: {
+        scriptSrc: ["'self'", 'https://telegram.org'],
         frameAncestors: ["'self'", 'https://web.telegram.org'],
         upgradeInsecureRequests: config.production ? [] : null,
       },

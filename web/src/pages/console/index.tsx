@@ -16,7 +16,9 @@ import {
 } from 'lucide-react';
 import { Wordmark } from '@/components/art';
 import { AccountControl } from '@/components/PublicLayout';
+import { TelegramNavigation } from '@/components/TelegramNavigation';
 import { useSession } from '@/lib/session';
+import { isMiniApp } from '@/lib/telegram';
 import NotFound from '../NotFound';
 import { isAdmin, useQueue, type Queue } from './shared';
 import Overview from './Overview';
@@ -95,6 +97,7 @@ export default function Console() {
   const { user } = useSession();
   return (
     <div className={styles.shell}>
+      <TelegramNavigation />
       <div className={styles.frame} aria-hidden="true" />
       <aside className={styles.side}>
         <Link to="/console" className={styles.brand} aria-label="后台总览">
@@ -108,8 +111,8 @@ export default function Console() {
       </aside>
       <div className={styles.body}>
         <header className={styles.top}>
-          <Link to="/" className={styles.site}>
-            站点
+          <Link to={isMiniApp ? '/airports' : '/'} className={styles.site}>
+            {isMiniApp ? '机场' : '站点'}
             <ArrowUpRight size={14} strokeWidth={1.75} aria-hidden="true" />
           </Link>
           <AccountControl />

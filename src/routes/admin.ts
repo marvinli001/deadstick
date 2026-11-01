@@ -14,10 +14,43 @@ import {
   reviveProvider,
 } from '../catalog/service.js';
 import { Id, MonitorSettings, Page, Resolution } from '../catalog/schemas.js';
-import { type TelegramSender } from '../telegram/notifications.js';
+import { enqueue, type TelegramSender } from '../telegram/notifications.js';
 
 export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender?: TelegramSender) {
   const api = app.withTypeProvider<TypeBoxTypeProvider>();
+  api.get(
+    '/admin/telegram/notifications',
+    { preHandler: reviewer, schema: { tags: ['telegram'] } },
+    async (req) => {
+      const [row] = await db.query<{ enabled: boolean }>(
+        "SELECT enabled FROM telegram_chats WHERE id=$1 AND kind='admin'",
+        [req.user!.telegram_id],
+      );
+      return { enabled: row?.enabled ?? false };
+    },
+  );
+  api.put(
+    '/admin/telegram/notifications',
+    {
+      preHandler: reviewer,
+      schema: {
+        tags: ['telegram'],
+        body: Type.Object({ enabled: Type.Boolean() }, { additionalProperties: false }),
+      },
+    },
+    async (req) => {
+      if (!req.user!.telegram_id)
+        throw new AppError(409, 'NOT_LINKED', 'Link a Telegram account first');
+      await db.transaction(async (tx) => {
+        await tx.query(
+          "INSERT INTO telegram_chats(id,title,kind,enabled) VALUES ($1,$2,'admin',$3) ON CONFLICT(id) DO UPDATE SET title=excluded.title,kind='admin',enabled=excluded.enabled",
+          [req.user!.telegram_id, req.user!.display_name, req.body.enabled],
+        );
+        await audit(tx, req.user!.id, 'telegram.notify', req.user!.telegram_id!, req.body);
+      });
+      return { enabled: req.body.enabled };
+    },
+  );
   api.get(
     '/admin/health',
     { preHandler: administrator, schema: { tags: ['admin'] } },
@@ -291,8 +324,8 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
         await tx.query('SELECT pg_advisory_xact_lock(73912682)');
         const user = required(
           (
-            await tx.query<{ role: string; disabled: boolean }>(
-              'SELECT role,disabled FROM users WHERE id=$1 FOR UPDATE',
+            await tx.query<{ role: string; disabled: boolean; telegram_id: string | null }>(
+              'SELECT role,disabled,telegram_id FROM users WHERE id=$1 FOR UPDATE',
               [req.params.id],
             )
           )[0],
@@ -316,6 +349,10 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
           req.params.id,
         ]);
         await tx.query('DELETE FROM sessions WHERE user_id=$1', [req.params.id]);
+        if (user.telegram_id && config.botToken)
+          await enqueue(tx, `commands:${token()}`, user.telegram_id, {}, null, {
+            method: 'setMyCommands',
+          });
         await audit(tx, req.user!.id, 'user.update', req.params.id, req.body);
         return { ok: true };
       }),

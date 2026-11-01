@@ -20,6 +20,7 @@ function safeNext(value: string | null) {
 export function TelegramButton({ mode = 'login' }: { mode?: 'login' | 'link' }) {
   const [busy, setBusy] = useState(false);
   const { toast } = useToastStack();
+  const [params] = useSearchParams();
   return (
     <Button
       type="button"
@@ -32,7 +33,9 @@ export function TelegramButton({ mode = 'login' }: { mode?: 'login' | 'link' }) 
           const { url } =
             mode === 'link'
               ? await api<{ url: string }>('/auth/telegram/link', { method: 'POST' })
-              : await api<{ url: string }>('/auth/telegram/start');
+              : await api<{ url: string }>('/auth/telegram/start', {
+                  query: { next: safeNext(params.get('next')) },
+                });
           window.location.assign(url);
         } catch (error) {
           toast({ type: 'error', title: errorText(error) });

@@ -57,7 +57,7 @@
 
 - Webhook 必须校验 `X-Telegram-Bot-Api-Secret-Token`，使用常量时间比较。
 - 用户身份只来自 Telegram 签名的数据：webhook 中的 `from.id`、OIDC `id_token`、Mini App `initData`。不要信任转发消息、命令参数或前端提交的用户 ID，也不要使用 Mini App 的 `initDataUnsafe`。
-- OIDC 回调校验签名、issuer、audience、nonce、state 与 PKCE；Mini App 数据校验签名、5 分钟时效并防止重放。修改时须保留 `test/core.test.ts` 中的相关测试。
+- OIDC 回调校验签名、issuer、audience、nonce、state 与 PKCE；站内返回路径绑定到授权挑战并拒绝外部地址。Mini App 首次登录校验签名、5 分钟时效，规范化完整字段后防止重排绕过重放保护；只有持有同账号有效会话与 CSRF 才能恢复已验证启动。修改时须保留 `test/core.test.ts` 与 `test/integration.test.ts` 中的相关测试。
 - 群内命令只响应已启用的白名单群；投稿和人工复核只在私聊中处理，复核时按数据库中的当前角色判断权限。回调按钮的 `callback_data` 视为用户输入，重新校验目标与权限。
 - 白名单之前只允许三类处理：`my_chat_member`（入群提醒、被移出后停用绑定）、`/bind` `/unbind`（要求网站角色为 admin）和 Guest Mode 回复。Guest Mode 与 inline 结果只读，只带链接按钮或祭奠按钮，不得加入任何改变审核、绑定或账号状态的按钮。
 - 按钮不能单独改变复核结论。确认跑路、恢复、排除和驳回投稿必须由审核员回复机器人自己发出的 force reply 提示，提示必须由本机器人发送（`reply_to_message.from.id` 等于机器人 ID），保存前重新按数据库角色判断。
@@ -72,7 +72,7 @@
 - 机场名称、描述、墓志铭、追悼留言等用户提供或可编辑的内容一律按文本渲染。不要使用 `innerHTML`、`dangerouslySetInnerHTML`、`v-html` 等方式插入这些内容；确需富文本时，使用白名单清洗库并经安全审查。
 - 机场官网链接只渲染 `http:` / `https:` 地址，添加 `rel="nofollow noopener noreferrer"`，并明确标示为外部站点。
 - Telegram 登录走后端的 `/auth/telegram/start` 流程；Mini App 把原始 `initData` 提交给 `POST /auth/telegram/miniapp`，前端不自行验证身份。
-- 页面的 Content-Security-Policy 由 Fastify 的 helmet 下发。不引入未经审查的第三方脚本；确需放宽 CSP 时在 PR 中说明来源与理由。
+- 页面的 Content-Security-Policy 由 Fastify 的 helmet 下发。Mini App 仅额外允许 `https://telegram.org`，用于加载官方 `telegram-web-app.js`，不信任 `initDataUnsafe`。不引入其他未经审查的第三方脚本；确需放宽 CSP 时在 PR 中说明来源与理由。
 
 ## 依赖与构建
 

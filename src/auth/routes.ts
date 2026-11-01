@@ -24,6 +24,13 @@ const credentials = Type.Object(
 );
 export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
   const api = app.withTypeProvider<TypeBoxTypeProvider>();
+  const destination = Type.Object({
+    next: Type.Optional(Type.String({ maxLength: 512, pattern: '^/(?!/)[^\\\\\\s]*$' })),
+  });
+  api.get('/auth/telegram/config', { schema: { tags: ['auth'] } }, async () => ({
+    bot_username: config.botUsername ?? null,
+    oidc_enabled: Boolean(config.telegramClientId && config.telegramClientSecret),
+  }));
   api.post(
     '/auth/register',
     {
@@ -174,6 +181,7 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
     mode: 'login' | 'link',
     req: Parameters<typeof authenticated>[0],
     reply: Parameters<typeof newSession>[2],
+    returnPath?: string,
   ) {
     if (!config.telegramClientId || !config.telegramClientSecret)
       throw new AppError(503, 'NOT_CONFIGURED', 'Telegram OIDC is not configured');
@@ -182,7 +190,7 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
       verifier = token(),
       nonce = token();
     await db.query(
-      "INSERT INTO auth_challenges(state_hash,browser_hash,nonce,verifier,mode,user_id,expires_at) VALUES ($1,$2,$3,$4,$5,$6,now()+interval '10 minutes')",
+      "INSERT INTO auth_challenges(state_hash,browser_hash,nonce,verifier,mode,user_id,return_path,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,now()+interval '10 minutes')",
       [
         digest(state),
         digest(browser),
@@ -190,6 +198,7 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
         encrypt(verifier, config.appKey),
         mode,
         mode === 'link' ? req.user!.id : null,
+        returnPath ?? null,
       ],
     );
     reply.setCookie('tg_state', browser, {
@@ -213,8 +222,10 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
     }).toString();
     return { url: url.toString() };
   }
-  api.get('/auth/telegram/start', { schema: { tags: ['auth'] } }, (req, reply) =>
-    start('login', req, reply),
+  api.get(
+    '/auth/telegram/start',
+    { schema: { tags: ['auth'], querystring: destination } },
+    (req, reply) => start('login', req, reply, req.query.next),
   );
   api.post(
     '/auth/telegram/link',
@@ -243,6 +254,7 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
           verifier: string;
           user_id: string | null;
           mode: string;
+          return_path: string | null;
         }>(
           'DELETE FROM auth_challenges WHERE state_hash=$1 AND browser_hash=$2 AND expires_at>now() RETURNING *',
           [digest(req.query.state), digest(req.cookies.tg_state ?? '')],
@@ -276,7 +288,11 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
         const user = await telegramUser(db, identity, challenge.user_id ?? undefined);
         const session = await newSession(db, config, reply, user);
         if (!browser) return session;
-        return reply.redirect(challenge.mode === 'link' ? '/me/security?telegram=linked' : '/me');
+        return reply.redirect(
+          challenge.mode === 'link'
+            ? '/me/security?telegram=linked'
+            : (challenge.return_path ?? (user.role === 'user' ? '/me' : '/console')),
+        );
       } catch (error) {
         if (!browser) throw error;
         const code = error instanceof AppError ? error.code : 'TELEGRAM_AUTH';
@@ -301,18 +317,41 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
     async (req, reply) => {
       if (!config.botToken)
         throw new AppError(503, 'NOT_CONFIGURED', 'Telegram bot is not configured');
-      const identity = verifyMiniApp(req.body.initData, config.botToken);
-      const [inserted] = await db.query(
-        "INSERT INTO auth_replays(hash,expires_at) VALUES ($1,now()+interval '10 minutes') ON CONFLICT DO NOTHING RETURNING hash",
-        [digest(req.body.initData)],
-      );
-      if (!inserted)
-        throw new AppError(
-          401,
-          'REPLAY',
-          'Mini App login data was already used; reopen the Mini App',
+      const launchData = new URLSearchParams(req.body.initData);
+      launchData.sort();
+      const replayHash = digest(launchData.toString());
+      // Only the same authenticated account can resume an already verified launch.
+      if (req.user) {
+        const [launch] = await db.query(
+          'SELECT hash FROM auth_replays WHERE hash=$1 AND user_id=$2 AND expires_at>now()',
+          [replayHash, req.user.id],
         );
-      return newSession(db, config, reply, await telegramUser(db, identity));
+        if (launch) {
+          const [row] = await db.query<{ has_password: boolean }>(
+            'SELECT password_hash IS NOT NULL AS has_password FROM users WHERE id=$1',
+            [req.user.id],
+          );
+          return {
+            user: { ...publicUser(req.user), has_password: row!.has_password },
+            csrfToken: req.csrfToken,
+          };
+        }
+      }
+      const identity = verifyMiniApp(req.body.initData, config.botToken);
+      const user = await telegramUser(db, identity);
+      return db.transaction(async (tx) => {
+        const [inserted] = await tx.query(
+          "INSERT INTO auth_replays(hash,user_id,expires_at) VALUES ($1,$2,now()+interval '30 days') ON CONFLICT DO NOTHING RETURNING hash",
+          [replayHash, user.id],
+        );
+        if (!inserted)
+          throw new AppError(
+            401,
+            'REPLAY',
+            'Mini App login data was already used; reopen the Mini App',
+          );
+        return newSession(tx, config, reply, user);
+      });
     },
   );
 }

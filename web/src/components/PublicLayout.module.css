@@ -1,3 +1,53 @@
+.miniPage {
+  min-height: var(--tg-viewport-stable-height, 100dvh);
+  display: flex;
+  flex-direction: column;
+  padding-top: calc(
+    var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px)
+  );
+  padding-right: var(--tg-safe-area-inset-right, 0px);
+  padding-left: var(--tg-safe-area-inset-left, 0px);
+  padding-bottom: calc(
+    66px + var(--tg-safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)) +
+      var(--tg-content-safe-area-inset-bottom, 0px)
+  );
+}
+
+.tabs {
+  position: fixed;
+  z-index: 30;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  min-height: 66px;
+  padding: 8px 12px
+    calc(
+      8px + var(--tg-safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)) +
+        var(--tg-content-safe-area-inset-bottom, 0px)
+    );
+  border-top: 1px solid var(--rule);
+  background: var(--paper);
+}
+
+.tabs a {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 48px;
+  color: var(--ink-3);
+  text-decoration: none;
+  font-size: 12px;
+}
+
+.tabs a.selected {
+  color: var(--ink);
+  background: var(--chry-wash);
+}
+
 .page {
   position: relative;
   min-height: 100dvh;

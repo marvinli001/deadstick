@@ -8,6 +8,9 @@
 
 ### 新增
 
+- Telegram 主入口：Bot `/app`、`/me`、`/admin` 与角色菜单；Mini App 原生返回、移动端底部导航、安全区适配、TG 内页面深链；投稿、机场详情与管理台复用现有页面。
+- `ADMIN_TELEGRAM_ID` 支持无需邮箱密码初始化管理员；Mini App 内可请求 Bot 私信权限、开关审核待办私信；后台角色变更通过 outbox 同步命令菜单。
+- `GET /auth/telegram/config`、`GET/PUT /admin/telegram/notifications`；OIDC 支持站内 `next` 目标并将其绑定到授权挑战。
 - 账号系统：邮箱密码注册与登录、可撤销会话、CSRF 校验、登录限流，以及用户、审核员、管理员三级权限。
 - Telegram 身份：OIDC + PKCE 登录、自动注册与已有账号绑定；Mini App `initData` 验签、时效与重放保护。
 - 机场资料库：标签、多官网、多订阅；管理员直接录入，或用户投稿后审核。订阅地址与原始机器人更新以 AES-256-GCM 加密存储。
@@ -32,6 +35,7 @@
 
 ### 修复
 
+- Mini App 开发模式重复消费启动凭据、登录失败沿用其他浏览器账号、重排字段绕过一次性登录保护；同账号有效会话可以恢复已验证启动。升级需运行迁移 `003_telegram_sessions.sql`，并重新执行 `pnpm telegram:setup`。
 - 机器人 `/submit` 因 TypeBox 未注册 `uri` 格式而拒绝所有投稿。
 
 [Unreleased]: https://github.com/marvinli001/deadstick/commits/main
