@@ -19,6 +19,7 @@ import { dateTime } from '@/lib/format';
 import type { BotUpdate, Page, TelegramChat } from '@/lib/types';
 import { PageHead, Table, usePaged, type Column } from './shared';
 import styles from './console.module.css';
+import TelegramSettings from './TelegramSettings';
 
 const kinds = [
   { value: 'group', label: '群组' },
@@ -359,12 +360,16 @@ export default function Telegram() {
   return (
     <>
       <PageHead title="Telegram" />
-      <Tabs defaultValue="chats" className={styles.tabs}>
+      <Tabs defaultValue="settings" className={styles.tabs}>
         <TabsList aria-label="Telegram">
+          <TabsTrigger value="settings">配置</TabsTrigger>
           <TabsTrigger value="chats">会话</TabsTrigger>
           <TabsTrigger value="updates">更新</TabsTrigger>
           <TabsTrigger value="api">Bot API</TabsTrigger>
         </TabsList>
+        <TabsContent value="settings">
+          <TelegramSettings />
+        </TabsContent>
         <TabsContent value="chats">
           <Chats />
         </TabsContent>

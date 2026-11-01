@@ -57,6 +57,7 @@ describe('web and API on one origin', () => {
   });
 
   it('caches assets without looking up the session', async () => {
+    query.mockClear();
     for (const url of ['/assets/main.js', '/fonts/test.woff2']) {
       const asset = await app.inject({ url, headers: { cookie: 'session=unused-token' } });
       expect(asset.statusCode).toBe(200);

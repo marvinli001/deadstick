@@ -34,7 +34,11 @@ API 与 worker 两个进程都要运行：API 接收 webhook 并把更新加密�
 
 机器人的名称、头像和简介可以在 BotFather 里改；简介和短简介也会被 `telegram:setup` 覆盖为项目默认文案。
 
-## 2. 环境变量
+## 2. 后台配置与环境变量
+
+推荐在管理员后台「Telegram → 配置」填写 Bot Token 和用户名，Webhook 密钥留空会自动生成。保存后点击「测试连接」，再点击「初始化 Webhook 与菜单」。同页可选填网页 Telegram 登录的 Client ID 与 Client Secret，Mini App 无需填写；Client ID 留空会关闭网页 Telegram 登录。公网地址由部署环境的 `PUBLIC_URL` 决定，页面显示对应的 Webhook 与登录回调地址。
+
+后台配置使用 `APP_KEY` 加密保存在数据库，页面只显示密钥是否已设置。密钥输入留空保留已有值；保存后优先于下表中的环境变量，API 在下次请求读取，worker 最迟约 1.5 秒后读取，无需重启。更换 Token、用户名或 Webhook 密钥后重新初始化；初始化不会丢弃 Telegram 的待处理更新。首次尚未接入 Telegram 时，可先用邮箱管理员进入后台配置。
 
 | 变量                      | 说明                                                                                      |
 | ------------------------- | ----------------------------------------------------------------------------------------- |
@@ -56,7 +60,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 
 ## 3. 初始化
 
-API 和 worker 上线、迁移完成后运行：
+API 和 worker 上线、迁移完成后，在后台点「初始化 Webhook 与菜单」，或运行读取相同配置的命令：
 
 ```sh
 pnpm telegram:setup
@@ -74,17 +78,18 @@ docker compose run --rm api node dist/telegram/setup.js
 
 ```json
 {
-  "bot": "@deadstick_bot",
-  "webhook": "https://example.com/telegram/webhook",
-  "pendingUpdates": 0,
-  "lastError": null,
-  "reviewerMenus": 2,
-  "unreachableReviewers": 0,
+  "bot_username": "deadstick_bot",
+  "bot_name": "Deadstick",
+  "webhook_url": "https://example.com/telegram/webhook",
+  "pending_updates": 0,
+  "last_error": null,
+  "reviewer_menus": 2,
+  "unreachable_reviewers": 0,
   "hints": ["Guest mode is off: BotFather Mini App > Bot Settings > Guest Mode"]
 }
 ```
 
-`hints` 列出 BotFather 里尚未开启的能力；`unreachableReviewers` 是还没私聊机器人点过 Start 的审核员数量。命令列表变化、域名变化或升级版本后重新运行；它是幂等的。
+`hints` 列出 BotFather 里尚未开启的能力；`unreachable_reviewers` 是还没私聊机器人点过 Start 的审核员数量。命令列表变化、域名变化或升级版本后重新运行；它是幂等的。
 
 ## 4. 审核员接收复核私信
 
@@ -201,17 +206,17 @@ Mini App 主应用链接使用 `https://t.me/<bot>?startapp=<目标>`。目标�
 
 ## 10. 排错
 
-| 现象                        | 检查                                                                                                            |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| 机器人完全不回复            | worker 是否运行（`GET /admin/health`）；`telegram:setup` 报告里的 `lastError`；反代是否转发 `/telegram/webhook` |
-| webhook 返回 401            | `TELEGRAM_WEBHOOK_SECRET` 与上次 `setWebhook` 时不一致，重新运行 `telegram:setup`                               |
-| 群里不响应                  | 群是否已绑定且启用；命令是否带 `@机器人`（同群有多个机器人时）                                                  |
-| 群命令没有“仅自己可见”      | 重新运行 `telegram:setup`；客户端版本是否支持 ephemeral 命令                                                    |
-| 消息里没有网站按钮          | `PUBLIC_URL` 必须是 HTTPS 公网地址                                                                              |
-| 没有“在机器人中查看”按钮    | 设置 `TELEGRAM_BOT_USERNAME`                                                                                    |
-| 审核员收不到私信            | 是否 `/notify` 开启、是否点过 Start、角色是否仍为审核员；`/admin/notifications` 里的 `error_code`               |
-| `@机器人` 没有结果          | BotFather 是否开启 inline mode；未加入的群里需要开启 Guest Mode                                                 |
-| Mini App 打开空白或无法登录 | BotFather 里的 Mini App 域名是否与 `PUBLIC_URL` 一致；`initData` 只能使用一次且 5 分钟内有效                    |
+| 现象                        | 检查                                                                                                             |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| 机器人完全不回复            | worker 是否运行（`GET /admin/health`）；`telegram:setup` 报告里的 `last_error`；反代是否转发 `/telegram/webhook` |
+| webhook 返回 401            | `TELEGRAM_WEBHOOK_SECRET` 与上次 `setWebhook` 时不一致，重新运行 `telegram:setup`                                |
+| 群里不响应                  | 群是否已绑定且启用；命令是否带 `@机器人`（同群有多个机器人时）                                                   |
+| 群命令没有“仅自己可见”      | 重新运行 `telegram:setup`；客户端版本是否支持 ephemeral 命令                                                     |
+| 消息里没有网站按钮          | `PUBLIC_URL` 必须是 HTTPS 公网地址                                                                               |
+| 没有“在机器人中查看”按钮    | 设置 `TELEGRAM_BOT_USERNAME`                                                                                     |
+| 审核员收不到私信            | 是否 `/notify` 开启、是否点过 Start、角色是否仍为审核员；`/admin/notifications` 里的 `error_code`                |
+| `@机器人` 没有结果          | BotFather 是否开启 inline mode；未加入的群里需要开启 Guest Mode                                                  |
+| Mini App 打开空白或无法登录 | BotFather 里的 Mini App 域名是否与 `PUBLIC_URL` 一致；`initData` 只能使用一次且 5 分钟内有效                     |
 
 ## 安全要点
 

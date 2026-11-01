@@ -58,9 +58,9 @@ Compose 包含 PostgreSQL、一次性迁移、API、worker。数据库没有暴�
 
 完整步骤、命令、深链、通知类型与排错见 [docs/telegram.md](docs/telegram.md)。最短路径：
 
-1. 在 [BotFather](https://t.me/BotFather) 创建机器人，填写 `TELEGRAM_BOT_TOKEN`、`TELEGRAM_BOT_USERNAME`，生成 `TELEGRAM_WEBHOOK_SECRET`；开启 inline mode、Guest Mode 和 **Main Mini App**，地址设为 `PUBLIC_URL`。
-2. Mini App 使用 Bot token 验签并自动登录，不需要 OIDC 凭据。管理员从外部浏览器登录时，可另配 BotFather Login Widget 的 `TELEGRAM_CLIENT_ID`、`TELEGRAM_CLIENT_SECRET`，登记回调 `${PUBLIC_URL}/auth/telegram/callback`。
-3. API 和 worker 上线后运行 `pnpm telegram:setup`（容器内 `docker compose run --rm api node dist/telegram/setup.js`），按输出的 `hints` 补齐 BotFather 设置。
+1. 在 [BotFather](https://t.me/BotFather) 创建机器人，在后台「Telegram → 配置」填写 Bot Token 与用户名，Webhook 密钥留空自动生成；开启 inline mode、Guest Mode 和 **Main Mini App**，地址设为 `PUBLIC_URL`。也可通过环境变量提供初始配置，后台保存后优先生效。
+2. Mini App 使用 Bot token 验签并自动登录，不需要 OIDC 凭据。管理员从外部浏览器登录时，可在同页填写 BotFather Login Widget 的 Client ID、Client Secret，登记页面显示的回调地址。
+3. 保存后点「测试连接」和「初始化 Webhook 与菜单」，按页面提示补齐 BotFather 设置。也可运行 `pnpm telegram:setup`（容器内 `docker compose run --rm api node dist/telegram/setup.js`），命令会读取后台已保存的配置。
 4. 用 `ADMIN_TELEGRAM_ID` 初始化管理员，私聊机器人点 Start，发送 `/admin` 打开管理台。在 Mini App「我的」开启 Bot 私信与审核待办私信；也可使用 `/notify`。其他用户先打开 Bot 或 Mini App，再由管理员按 Telegram ID 分配审核角色。
 5. 把机器人加入群，管理员点私信里的“绑定为通报群”，或在群（论坛话题）里发送 `/bind`。
 
@@ -89,6 +89,7 @@ OIDC 登录流程：`GET /auth/telegram/start?next=/console` 获得授权 URL �
 | 用户角色 / 留言审核               | `/admin/users?q=&role=`、`/admin/memorials?status=`                                                                                    |
 | 机器人绑定 / 完整 API / 事件      | `/admin/telegram/chats`、`/admin/telegram/api/:method`、`/admin/telegram/updates`                                                      |
 | Telegram 配置 / 个人审核私信      | `GET /auth/telegram/config`、`GET/PUT /admin/telegram/notifications`（审核员管理自己的待办私信）                                       |
+| 管理员 Bot 配置 / 测试 / 初始化   | `GET/PUT /admin/telegram/settings`、`POST /admin/telegram/test`、`POST /admin/telegram/setup`                                          |
 
 `GET /providers`、`GET /graveyard`、`GET /admin/providers` 返回 `{ items, total, limit, offset }`。机场详情额外返回 `follower_count`、`memorial_count` 和 `following`（未登录为 `null`）。`GET /auth/me` 的 `user` 带 `has_password`，前端据此决定是否允许解绑 Telegram。
 

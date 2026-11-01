@@ -18,6 +18,7 @@ import { catalogRoutes } from './catalog/routes.js';
 import { adminRoutes } from './routes/admin.js';
 import { telegramRoutes } from './telegram/routes.js';
 import { telegramSender, TelegramError, type TelegramSender } from './telegram/notifications.js';
+import { telegramConfig } from './telegram/settings.js';
 
 const staticPath = /^\/(?:(?:assets|fonts)\/|favicon\.svg(?:\?|$))/;
 
@@ -26,6 +27,8 @@ export async function buildApp(
   config: Config,
   options: { logger?: boolean; sender?: TelegramSender } = {},
 ) {
+  const defaults = config;
+  config = { ...config };
   const app = Fastify({
     logger:
       options.logger === false
@@ -97,6 +100,10 @@ export async function buildApp(
   app.decorateRequest('user', null);
   app.decorateRequest('sessionHash', null);
   app.decorateRequest('csrfToken', null);
+  app.addHook('onRequest', async (req) => {
+    if (!staticPath.test(req.url) && !req.url.startsWith('/health/'))
+      Object.assign(config, await telegramConfig(db, defaults));
+  });
   const auth = authHook(db, config);
   app.addHook('preHandler', async (req) => {
     if (!staticPath.test(req.url)) await auth(req);
@@ -145,7 +152,13 @@ export async function buildApp(
       .code(500)
       .send({ error: { code: 'INTERNAL', message: 'Internal server error' }, requestId: req.id });
   });
-  const sender = options.sender ?? (config.botToken ? telegramSender(config.botToken) : undefined);
+  const sender: TelegramSender = options.sender ?? {
+    send(method, parameters) {
+      if (!config.botToken)
+        throw new AppError(503, 'NOT_CONFIGURED', 'Telegram bot is not configured');
+      return telegramSender(config.botToken).send(method, parameters);
+    },
+  };
   app.get('/health/live', async () => ({ ok: true }));
   app.get('/health/ready', async () => {
     await db.query('SELECT 1');

@@ -2,16 +2,18 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { access } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { loadConfig } from './config.js';
+import { loadConfig, type Config } from './config.js';
 import { database } from './db.js';
 import { checker } from './monitor/check.js';
 import { claimChecks, cleanup, monitorSettings, runCheck, schedule } from './monitor/queue.js';
 import { createBot, processBotUpdates } from './telegram/bot.js';
 import { dispatchNotifications, telegramSender } from './telegram/notifications.js';
+import { telegramConfig } from './telegram/settings.js';
 
-const config = loadConfig(),
-  { db, close } = database(config.databaseUrl),
+const defaults = loadConfig(),
+  { db, close } = database(defaults.databaseUrl),
   controller = new AbortController();
+let config = await telegramConfig(db, defaults);
 if (config.probeMode === 'proxy') await access(config.mihomoBin!, constants.X_OK);
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => controller.abort());
 const workerId = randomUUID();
@@ -37,6 +39,13 @@ async function loop(name: string, work: () => Promise<unknown>, delay: number) {
 }
 const check = checker(config);
 const loops = [
+  loop(
+    'telegram_config',
+    async () => {
+      config = await telegramConfig(db, defaults);
+    },
+    1500,
+  ),
   loop(
     'heartbeat',
     () =>
@@ -72,21 +81,38 @@ const loops = [
     3600000,
   ),
 ];
-if (config.botToken) {
-  const bot = createBot(db, config),
-    sender = telegramSender(config.botToken);
+{
+  let bot: ReturnType<typeof createBot> | undefined;
+  let botConfig: Config | undefined;
   // Keep notification delivery alive even if getMe or inbound processing temporarily fails.
   loops.push(
     loop(
       'telegram_inbox',
       async () => {
+        if (!config.botToken) return;
+        if (
+          !bot ||
+          config.botToken !== botConfig?.botToken ||
+          config.botUsername !== botConfig?.botUsername
+        ) {
+          botConfig = config;
+          bot = createBot(db, config);
+        }
         if (!bot.isInited()) await bot.init();
-        await processBotUpdates(db, config, bot);
+        await processBotUpdates(db, botConfig!, bot);
       },
       150,
     ),
   );
-  loops.push(loop('telegram_outbox', () => dispatchNotifications(db, sender, 3), 1500));
+  loops.push(
+    loop(
+      'telegram_outbox',
+      async () => {
+        if (config.botToken) await dispatchNotifications(db, telegramSender(config.botToken), 3);
+      },
+      1500,
+    ),
+  );
 }
 console.log(
   JSON.stringify({ event: 'worker_started', workerId, telegram: Boolean(config.botToken) }),
