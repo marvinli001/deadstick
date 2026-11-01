@@ -1,0 +1,61 @@
+name: Backend checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-bookworm
+        env:
+          POSTGRES_USER: deadstick
+          POSTGRES_PASSWORD: deadstick
+          POSTGRES_DB: deadstick_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd 'pg_isready -U deadstick -d deadstick_test'
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://deadstick:deadstick@localhost:5432/deadstick_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.6.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: docker build -t deadstick:local .
+      - name: Verify proxy engine
+        run: docker run --rm --entrypoint /usr/local/bin/mihomo deadstick:local -v
+      - name: Start deployed services
+        run: |
+          node --input-type=module <<'JS'
+          import {writeFileSync} from 'node:fs';
+          import {randomBytes} from 'node:crypto';
+          const password=randomBytes(24).toString('hex');
+          writeFileSync('.env',`NODE_ENV=production\nAPP_KEY=${randomBytes(32).toString('base64')}\nPOSTGRES_PASSWORD=${password}\nDATABASE_URL=postgres://deadstick:${password}@postgres:5432/deadstick\nPUBLIC_URL=https://example.com\nPROBE_MODE=proxy\nMIHOMO_BIN=/usr/local/bin/mihomo\n`);
+          JS
+          docker compose up -d --no-build --wait --wait-timeout 90
+          curl --fail http://127.0.0.1:3000/health/ready
+          docker compose exec -T api node --input-type=module <<'JS'
+          import pg from 'pg';
+          const client=new pg.Client({connectionString:process.env.DATABASE_URL});
+          await client.connect();
+          const {rows}=await client.query("SELECT count(*)::int AS count FROM worker_heartbeats WHERE last_seen_at>now()-interval '30 seconds'");
+          if(rows[0].count<1) throw new Error('Worker heartbeat missing');
+          await client.end();
+          JS
+      - name: Container diagnostics
+        if: failure()
+        run: docker compose logs --tail 80
+      - name: Stop deployed services
+        if: always()
+        run: docker compose down -v --remove-orphans

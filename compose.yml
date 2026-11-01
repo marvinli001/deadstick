@@ -1,0 +1,54 @@
+services:
+  postgres:
+    image: postgres:16-bookworm
+    environment:
+      POSTGRES_DB: deadstick
+      POSTGRES_USER: deadstick
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U deadstick -d deadstick']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+  migrate:
+    image: deadstick:local
+    build: .
+    env_file: .env
+    command: [node, dist/migrate.js]
+    depends_on:
+      postgres: { condition: service_healthy }
+  api:
+    image: deadstick:local
+    init: true
+    build: .
+    env_file: .env
+    ports: ['127.0.0.1:3000:3000']
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+  worker:
+    image: deadstick:local
+    init: true
+    build: .
+    env_file: .env
+    command: [node, dist/worker.js]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    stop_grace_period: 45s
+    restart: unless-stopped
+volumes:
+  postgres:
