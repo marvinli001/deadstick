@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { DB } from '../db.js';
 import type { Config } from '../config.js';
 import type { MonitorSettings } from '../catalog/schemas.js';
-import { broadcast } from '../telegram/notifications.js';
+import { notifyIncidentOpened, notifyRecovery } from '../telegram/notifications.js';
 import { type CheckEndpoint, type Endpoint, type EndpointResult, summarize } from './check.js';
 
 export async function monitorSettings(db: DB) {
@@ -58,6 +58,7 @@ export async function runCheck(
     const [provider] = await db.query<{
       id: string;
       name: string;
+      slug: string;
       config_version: number;
       enabled: boolean;
       lifecycle: string;
@@ -142,27 +143,19 @@ export async function runCheck(
           [provider.id, `连续 ${streak} 次检测异常；等待人工二次核验`],
         );
         if (incident)
-          await broadcast(
+          await notifyIncidentOpened(
             tx,
             config,
-            provider.id,
-            `incident:${incident.id}`,
-            `⚠️ 检测异常，尚未确认跑路\n${provider.name}\n连续 ${streak} 次无法通过检测，已请求管理员复核。`,
+            provider,
             incident.id,
+            `连续 ${streak} 次无法通过检测，已请求管理员复核。`,
           );
       } else if (['healthy', 'degraded'].includes(summary.health)) {
         const closed = await tx.query<{ id: string }>(
           "UPDATE incidents SET status='resolved',resolution='自动检测恢复，未确认跑路',resolved_at=now() WHERE provider_id=$1 AND status='open' RETURNING id",
           [provider.id],
         );
-        for (const incident of closed)
-          await broadcast(
-            tx,
-            config,
-            provider.id,
-            `recovery:${incident.id}`,
-            `✅ 检测恢复\n${provider.name}\n网站和订阅已通过当前检测。`,
-          );
+        for (const incident of closed) await notifyRecovery(tx, config, provider, incident.id);
       }
       await tx.query(
         "UPDATE check_jobs SET status='done',finished_at=now(),lease_until=NULL WHERE id=$1",

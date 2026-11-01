@@ -4,20 +4,50 @@ import { Type } from '@sinclair/typebox';
 import type { DB } from '../db.js';
 import type { Config } from '../config.js';
 import { authenticated, reviewer } from '../auth/service.js';
-import { AppError, required } from '../errors.js';
+import { required } from '../errors.js';
 import { Id, Page, ProviderInput } from './schemas.js';
 import {
   addTribute,
   audit,
   createProvider,
+  createMemorial,
+  createSubmission,
   insertEndpoints,
   prepareProvider,
   providerColumns,
-  type PreparedProvider,
+  reviewSubmission,
+  setFollow,
 } from './service.js';
 
 export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
   const api = app.withTypeProvider<TypeBoxTypeProvider>();
+  const count = async (sql: string, values: unknown[]) =>
+    (await db.query<{ total: number }>(`SELECT count(*)::int AS total ${sql}`, values))[0]!.total;
+  async function providerDetail(column: 'id' | 'slug', value: string, userId?: string) {
+    const provider = required(
+      (
+        await db.query<{ id: string }>(
+          `SELECT ${providerColumns},(SELECT count(*)::int FROM follows f WHERE f.provider_id=p.id) AS follower_count,(SELECT count(*)::int FROM memorials m WHERE m.provider_id=p.id AND m.status='visible') AS memorial_count,CASE WHEN $2::uuid IS NULL THEN NULL ELSE EXISTS(SELECT 1 FROM follows f WHERE f.provider_id=p.id AND f.user_id=$2::uuid) END AS following FROM providers p WHERE p.${column}=$1`,
+          [value, userId ?? null],
+        )
+      )[0],
+    );
+    const [websites, incidents, tributes] = await Promise.all([
+      db.query(
+        "SELECT id,label,public_url FROM endpoints WHERE provider_id=$1 AND kind='website'",
+        [provider.id],
+      ),
+      db.query(
+        'SELECT id,status,summary,resolution,evidence_urls,created_at,resolved_at FROM incidents WHERE provider_id=$1 ORDER BY created_at DESC LIMIT 20',
+        [provider.id],
+      ),
+      db.query(
+        'SELECT kind,count(*)::int AS count FROM tributes WHERE provider_id=$1 GROUP BY kind',
+        [provider.id],
+      ),
+    ]);
+    return { ...provider, websites, incidents, tributes };
+  }
   api.get(
     '/providers',
     {
@@ -35,25 +65,33 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     },
     async (req) => {
       const { q, lifecycle, tag, limit = 20, offset = 0 } = req.query;
-      return {
-        items: await db.query(
-          `SELECT ${providerColumns},(SELECT count(*)::int FROM tributes t WHERE t.provider_id=p.id) AS tribute_count FROM providers p WHERE ($1::text IS NULL OR p.name ILIKE '%'||$1||'%' OR p.slug ILIKE '%'||$1||'%') AND ($2::text IS NULL OR p.lifecycle=$2) AND ($3::text IS NULL OR $3=ANY(p.tags)) ORDER BY p.created_at DESC,p.id LIMIT $4 OFFSET $5`,
-          [q ?? null, lifecycle ?? null, tag ?? null, limit, offset],
+      const filter =
+        "FROM providers p WHERE ($1::text IS NULL OR p.name ILIKE '%'||$1||'%' OR p.slug ILIKE '%'||$1||'%') AND ($2::text IS NULL OR p.lifecycle=$2) AND ($3::text IS NULL OR $3=ANY(p.tags))";
+      const values = [q ?? null, lifecycle ?? null, tag ?? null];
+      const [items, total] = await Promise.all([
+        db.query(
+          `SELECT ${providerColumns},(SELECT count(*)::int FROM tributes t WHERE t.provider_id=p.id) AS tribute_count ${filter} ORDER BY p.created_at DESC,p.id LIMIT $4 OFFSET $5`,
+          [...values, limit, offset],
         ),
-        limit,
-        offset,
-      };
+        count(filter, values),
+      ]);
+      return { items, total, limit, offset };
     },
   );
   api.get(
     '/graveyard',
     { schema: { tags: ['cemetery'], querystring: Type.Object(Page) } },
-    async (req) => ({
-      items: await db.query(
-        `SELECT ${providerColumns},(SELECT count(*)::int FROM tributes t WHERE t.provider_id=p.id) AS tribute_count FROM providers p WHERE lifecycle='dead' ORDER BY death_at DESC,p.id LIMIT $1 OFFSET $2`,
-        [req.query.limit ?? 20, req.query.offset ?? 0],
-      ),
-    }),
+    async (req) => {
+      const { limit = 20, offset = 0 } = req.query;
+      const [items, total] = await Promise.all([
+        db.query(
+          `SELECT ${providerColumns},(SELECT count(*)::int FROM tributes t WHERE t.provider_id=p.id) AS tribute_count FROM providers p WHERE lifecycle='dead' ORDER BY death_at DESC,p.id LIMIT $1 OFFSET $2`,
+          [limit, offset],
+        ),
+        count("FROM providers WHERE lifecycle='dead'", []),
+      ]);
+      return { items, total, limit, offset };
+    },
   );
   api.get(
     '/stats',
@@ -65,28 +103,19 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
         )
       )[0],
   );
-  api.get('/providers/:id', { schema: { tags: ['catalog'], params: Id } }, async (req) => {
-    const provider = required(
-      (
-        await db.query(`SELECT ${providerColumns} FROM providers p WHERE id=$1`, [req.params.id])
-      )[0],
-    );
-    const [websites, incidents, tributes] = await Promise.all([
-      db.query(
-        "SELECT id,label,public_url FROM endpoints WHERE provider_id=$1 AND kind='website'",
-        [req.params.id],
-      ),
-      db.query(
-        'SELECT id,status,summary,resolution,evidence_urls,created_at,resolved_at FROM incidents WHERE provider_id=$1 ORDER BY created_at DESC LIMIT 20',
-        [req.params.id],
-      ),
-      db.query(
-        'SELECT kind,count(*)::int AS count FROM tributes WHERE provider_id=$1 GROUP BY kind',
-        [req.params.id],
-      ),
-    ]);
-    return { ...provider, websites, incidents, tributes };
-  });
+  api.get('/providers/:id', { schema: { tags: ['catalog'], params: Id } }, (req) =>
+    providerDetail('id', req.params.id, req.user?.id),
+  );
+  api.get(
+    '/providers/slug/:slug',
+    {
+      schema: {
+        tags: ['catalog'],
+        params: Type.Object({ slug: ProviderInput.properties.slug }),
+      },
+    },
+    (req) => providerDetail('slug', req.params.slug, req.user?.id),
+  );
   api.get(
     '/providers/:id/checks',
     { schema: { tags: ['catalog'], params: Id, querystring: Type.Object(Page) } },
@@ -105,11 +134,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
       schema: { tags: ['submissions'], body: ProviderInput },
     },
     async (req, reply) => {
-      const payload = prepareProvider(req.body, config);
-      const [row] = await db.query(
-        'INSERT INTO submissions(user_id,payload) VALUES ($1,$2) RETURNING id,status,created_at',
-        [req.user!.id, JSON.stringify(payload)],
-      );
+      const row = await createSubmission(db, config, req.user!, prepareProvider(req.body, config));
       reply.code(201);
       return row;
     },
@@ -135,6 +160,36 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
       const result = await db.transaction((tx) => createProvider(tx, prepared, req.user!.id));
       reply.code(201);
       return result;
+    },
+  );
+  api.get(
+    '/admin/providers',
+    {
+      preHandler: reviewer,
+      schema: {
+        tags: ['admin'],
+        querystring: Type.Object({
+          ...Page,
+          q: Type.Optional(Type.String({ maxLength: 120 })),
+          lifecycle: Type.Optional(
+            Type.Union([Type.Literal('active'), Type.Literal('suspected'), Type.Literal('dead')]),
+          ),
+        }),
+      },
+    },
+    async (req) => {
+      const { q, lifecycle, limit = 20, offset = 0 } = req.query;
+      const filter =
+        "FROM providers p WHERE ($1::text IS NULL OR p.name ILIKE '%'||$1||'%' OR p.slug ILIKE '%'||$1||'%') AND ($2::text IS NULL OR p.lifecycle=$2)";
+      const values = [q ?? null, lifecycle ?? null];
+      const [items, total] = await Promise.all([
+        db.query(
+          `SELECT ${providerColumns},p.enabled,p.failure_streak,p.next_check_at,p.updated_at,(SELECT count(*)::int FROM endpoints e WHERE e.provider_id=p.id AND e.kind='website') AS website_count,(SELECT count(*)::int FROM endpoints e WHERE e.provider_id=p.id AND e.kind='subscription') AS subscription_count ${filter} ORDER BY p.created_at DESC,p.id LIMIT $3 OFFSET $4`,
+          [...values, limit, offset],
+        ),
+        count(filter, values),
+      ]);
+      return { items, total, limit, offset };
     },
   );
   api.put(
@@ -166,6 +221,19 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
         [req.params.id],
       ),
     }),
+  );
+  api.get(
+    '/admin/providers/:id',
+    { preHandler: reviewer, schema: { tags: ['admin'], params: Id } },
+    async (req) =>
+      required(
+        (
+          await db.query(
+            `SELECT ${providerColumns},p.enabled,p.failure_streak,p.next_check_at,p.updated_at FROM providers p WHERE id=$1`,
+            [req.params.id],
+          )
+        )[0],
+      ),
   );
   api.patch(
     '/admin/providers/:id/monitoring',
@@ -229,46 +297,13 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
         ),
       },
     },
-    async (req) =>
-      db.transaction(async (tx) => {
-        const row = required(
-          (
-            await tx.query<{ status: string; payload: PreparedProvider }>(
-              'SELECT status,payload FROM submissions WHERE id=$1 FOR UPDATE',
-              [req.params.id],
-            )
-          )[0],
-        );
-        if (row.status !== 'pending')
-          throw new AppError(409, 'ALREADY_REVIEWED', 'Submission already reviewed');
-        const provider = req.body.approve
-          ? await createProvider(tx, row.payload, req.user!.id)
-          : null;
-        await tx.query(
-          'UPDATE submissions SET status=$1,reason=$2,reviewer_id=$3,provider_id=$4,reviewed_at=now() WHERE id=$5',
-          [
-            req.body.approve ? 'approved' : 'rejected',
-            req.body.reason,
-            req.user!.id,
-            provider?.id ?? null,
-            req.params.id,
-          ],
-        );
-        await audit(tx, req.user!.id, 'submission.review', req.params.id, {
-          approve: req.body.approve,
-        });
-        return { providerId: provider?.id ?? null };
-      }),
+    (req) => reviewSubmission(db, config, req.params.id, req.body, req.user!.id),
   );
   api.put(
     '/providers/:id/follow',
     { preHandler: authenticated, schema: { tags: ['catalog'], params: Id } },
     async (req) => {
-      required((await db.query('SELECT id FROM providers WHERE id=$1', [req.params.id]))[0]);
-      await db.query(
-        'INSERT INTO follows(user_id,provider_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
-        [req.user!.id, req.params.id],
-      );
+      await setFollow(db, req.user!.id, req.params.id, true);
       return { ok: true };
     },
   );
@@ -276,10 +311,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     '/providers/:id/follow',
     { preHandler: authenticated, schema: { tags: ['catalog'], params: Id } },
     async (req) => {
-      await db.query('DELETE FROM follows WHERE user_id=$1 AND provider_id=$2', [
-        req.user!.id,
-        req.params.id,
-      ]);
+      await setFollow(db, req.user!.id, req.params.id, false);
       return { ok: true };
     },
   );
@@ -328,26 +360,11 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
         ),
       },
     },
-    async (req, reply) =>
-      db.transaction(async (tx) => {
-        const provider = required(
-          (
-            await tx.query<{ lifecycle: string }>(
-              'SELECT lifecycle FROM providers WHERE id=$1 FOR SHARE',
-              [req.params.id],
-            )
-          )[0],
-        );
-        if (provider.lifecycle !== 'dead')
-          throw new AppError(409, 'NOT_DEAD', 'Provider has not been confirmed dead');
-        reply.code(201);
-        return (
-          await tx.query(
-            'INSERT INTO memorials(provider_id,user_id,body) VALUES ($1,$2,$3) RETURNING id,status',
-            [req.params.id, req.user!.id, req.body.body],
-          )
-        )[0];
-      }),
+    async (req, reply) => {
+      const row = await createMemorial(db, req.params.id, req.user!, req.body.body);
+      reply.code(201);
+      return row;
+    },
   );
   api.get(
     '/providers/:id/memorials',

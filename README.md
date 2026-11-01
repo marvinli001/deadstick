@@ -12,7 +12,7 @@
 - **真实代理出网模式**：使用 Mihomo 临时进程，经抽样节点访问 HTTPS 204 探针，验证代理握手和请求。也可明确选择 TCP 连通性模式。单节点配置经过白名单重建，节点域名解析后固定到公网 IP，不执行订阅中的全局配置、规则、外部 provider 或代理链。
 - 连续失败达到阈值后，创建一次异常事件，通知允许的群和绑定的审核员；只有人工提交原因及证据后才能确认跑路。自动恢复会关闭未确认异常，已确认的墓碑只能人工复活。
 - 墓园列表、墓志铭、献花 / 点烛 / 上香、每天每人每种一次、审核后的追悼留言、关注和状态变更通知。
-- Telegram 搜索、状态、投稿、关注、献花、追悼会、回调按钮、inline 搜索、私聊人工复核、群白名单和论坛 topic 通知。
+- Telegram 机器人：HTML 卡片与彩色按钮、墓园分页、深链、追悼会实时计数、inline 分享、Guest Mode 回复、群内仅本人可见的 ephemeral 命令与回复、rich message 检测报告；审核员在私聊用按钮加回复完成异常复核、投稿与留言审核；群通过 `/bind` 或入群提醒绑定，支持论坛话题。
 - 完整 Bot API JSON / multipart 管理调用入口，不裁剪新参数；持久化接收所有当前更新类型并保留未知字段。应用没有为支付、商务代聊等与机场监测无关的功能设计业务流程；这些能力可通过完整 API 入口调用，原始事件可在管理接口读取。
 - 通知 outbox、429 `retry_after`、失败重试、死信重发、管理审计、worker 心跳、健康检查、数据保留期和 GitHub CI。
 
@@ -57,51 +57,40 @@ Compose 包含 PostgreSQL、一次性迁移、API、worker。数据库没有暴�
 
 ## Telegram 配置
 
-1. 在 [BotFather](https://t.me/BotFather) 创建机器人，将 token 填到 `TELEGRAM_BOT_TOKEN`。随机生成一个 32–256 位 URL 安全字符串，填入 `TELEGRAM_WEBHOOK_SECRET`。
-2. 在 BotFather 的 Login Widget 设置里获取 OIDC Client ID / Secret，填入 `TELEGRAM_CLIENT_ID`、`TELEGRAM_CLIENT_SECRET`；登记精确回调 `${PUBLIC_URL}/auth/telegram/callback` 和网站 origin。这里的 Client Secret 不是 bot token。
-3. API 和 worker 上线后运行 `pnpm telegram:setup`；容器内使用 `docker compose run --rm api node dist/telegram/setup.js`。该命令设置菜单和全部更新类型的 webhook，不丢弃积压更新。需要 inline 搜索时在 BotFather 启用 inline mode。
-4. 审核员登录网站并通过 `/auth/telegram/link` 绑定 Telegram，私聊机器人点击 Start；管理员调用 `PUT /admin/telegram/chats/{Telegram用户ID}`，设置 `kind=admin`。绑定接口会核对该 Telegram ID 对应的后台审核权限。
-5. 把机器人加入群，再通过同一接口绑定负数群 ID，设置 `kind=group`；论坛可加 `topicId`。只有启用的白名单群会收到通报、响应群内命令。群迁移为超级群时自动更新绑定。
+完整步骤、命令、深链、通知类型与排错见 [docs/telegram.md](docs/telegram.md)。最短路径：
+
+1. 在 [BotFather](https://t.me/BotFather) 创建机器人，填写 `TELEGRAM_BOT_TOKEN`、`TELEGRAM_BOT_USERNAME`，生成 `TELEGRAM_WEBHOOK_SECRET`；开启 inline mode 与 Guest Mode，Mini App 地址设为 `PUBLIC_URL`。
+2. 网站登录需要 BotFather Login Widget 的 `TELEGRAM_CLIENT_ID`、`TELEGRAM_CLIENT_SECRET`，并登记回调 `${PUBLIC_URL}/auth/telegram/callback`。
+3. API 和 worker 上线后运行 `pnpm telegram:setup`（容器内 `docker compose run --rm api node dist/telegram/setup.js`），按输出的 `hints` 补齐 BotFather 设置。
+4. 审核员在网站绑定 Telegram，私聊机器人点 Start，发送 `/notify` 开启复核私信。
+5. 把机器人加入群，管理员点私信里的“绑定为通报群”，或在群（论坛话题）里发送 `/bind`。
 
 邮箱和 Telegram 是独立身份；系统不会根据昵称合并账号。一个 Telegram 已经属于另一个账号时，绑定返回冲突；可用 Telegram 登录原账号，由管理员给该账号分配审核权限。关闭 Telegram 配置时，普通 REST API 和监测仍可独立使用。
 
 OIDC 登录流程：`GET /auth/telegram/start` 获得授权 URL → 浏览器打开 URL → 回调校验签名、issuer、audience、nonce、state、PKCE → 返回用户信息和会话 cookie。账号绑定使用已登录的 `POST /auth/telegram/link` 发起相同流程。Mini App 使用 `POST /auth/telegram/miniapp` 提交原始 `initData`，有效期 5 分钟且每份只能使用一次。
-
-机器人主要命令：
-
-```text
-/search 机场名
-/status airport-slug
-/follow airport-slug
-/unfollow airport-slug
-/graveyard
-/tribute airport-slug
-/memorial airport-slug 追悼留言
-/ceremony airport-slug
-/submit 名称 | airport-slug | https://官网 | https://订阅（仅私聊）
-/review 事件UUID dead https://证据地址 核验原因（仅有权限者私聊）
-```
-
-完整 API 桥：`POST /admin/telegram/api/{method}` 接收原始 JSON 参数，`POST /admin/telegram/upload/{method}` 接收 multipart（总计 20 MiB），可传 `attach://字段名`。比如 `sendRichMessage`、ephemeral 参数、Business / Mini App / 新版 polls 等直接使用官方参数。全部调用仅管理员可用，审计记录方法名，不记录凭据或文件内容。标准 Telegram API 的文件、权限、付费和时效限制仍然适用。
+已绑定 Telegram 且设置了邮箱密码的账号可以用 `DELETE /auth/telegram` 解绑；只有 Telegram 一种登录方式时返回 `LAST_LOGIN_METHOD`。
 
 ## 前端接入
 
 以 `/docs` 中的输入 schema 和 `/openapi.json` 为准。返回字段采用 snake_case；请求参数采用文档里的 camelCase。
 
-| 用途                            | 接口                                                                                            |
-| ------------------------------- | ----------------------------------------------------------------------------------------------- |
-| 注册 / 登录 / 当前用户 / 退出   | `POST /auth/register`、`POST /auth/login`、`GET /auth/me`、`POST /auth/logout`                  |
-| 机场库 / 详情 / 检测记录 / 统计 | `GET /providers`、`GET /providers/:id`、`GET /providers/:id/checks`、`GET /stats`               |
-| 墓园 / 祭奠 / 留言              | `GET /graveyard`、`POST /providers/:id/tributes`、`GET/POST /providers/:id/memorials`           |
-| 投稿 / 我的投稿                 | `POST /submissions`、`GET /submissions/mine`                                                    |
-| 关注                            | `PUT/DELETE /providers/:id/follow`、`GET /follows`                                              |
-| 管理录入 / 修改 / 停启监测      | `POST /admin/providers`、`PUT /admin/providers/:id`、`PATCH /admin/providers/:id/monitoring`    |
-| 投稿审核                        | `GET /admin/submissions`、`POST /admin/submissions/:id/review`                                  |
-| 事件 / 人工复核 / 复活          | `GET /admin/incidents`、`POST /admin/incidents/:id/resolve`、`POST /admin/providers/:id/revive` |
-| 手动检测 / 任务 / 结果          | `POST /admin/providers/:id/check`、`GET /admin/jobs`、`GET /admin/checks/:id/results`           |
-| 设置 / 心跳 / 通知 / 审计       | `/admin/settings/monitor`、`/admin/health`、`/admin/notifications`、`/admin/audit`              |
-| 用户角色 / 留言审核             | `/admin/users`、`/admin/memorials`                                                              |
-| 机器人绑定 / 完整 API / 事件    | `/admin/telegram/chats`、`/admin/telegram/api/:method`、`/admin/telegram/updates`               |
+| 用途                              | 接口                                                                                                                                   |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| 注册 / 登录 / 当前用户 / 退出     | `POST /auth/register`、`POST /auth/login`、`GET /auth/me`、`POST /auth/logout`                                                         |
+| 资料 / 改密 / 解绑 Telegram       | `PATCH /auth/me`、`POST /auth/password`、`DELETE /auth/telegram`                                                                       |
+| 机场库 / 详情 / 检测记录 / 统计   | `GET /providers`、`GET /providers/:id`、`GET /providers/slug/:slug`、`GET /providers/:id/checks`、`GET /stats`                         |
+| 墓园 / 祭奠 / 留言                | `GET /graveyard`、`POST /providers/:id/tributes`、`GET/POST /providers/:id/memorials`                                                  |
+| 投稿 / 我的投稿                   | `POST /submissions`、`GET /submissions/mine`                                                                                           |
+| 关注                              | `PUT/DELETE /providers/:id/follow`、`GET /follows`                                                                                     |
+| 管理列表 / 录入 / 修改 / 停启监测 | `GET/POST /admin/providers`、`GET/PUT /admin/providers/:id`、`PATCH /admin/providers/:id/monitoring`                                   |
+| 投稿审核                          | `GET /admin/submissions`、`POST /admin/submissions/:id/review`                                                                         |
+| 事件 / 发起复核 / 人工复核 / 复活 | `GET /admin/incidents`、`POST /admin/providers/:id/incidents`、`POST /admin/incidents/:id/resolve`、`POST /admin/providers/:id/revive` |
+| 手动检测 / 任务 / 结果            | `POST /admin/providers/:id/check`、`GET /admin/jobs`、`GET /admin/checks/:id/results`                                                  |
+| 设置 / 心跳 / 通知 / 审计         | `/admin/settings/monitor`、`/admin/health`、`/admin/notifications`、`/admin/audit`                                                     |
+| 用户角色 / 留言审核               | `/admin/users?q=&role=`、`/admin/memorials?status=`                                                                                    |
+| 机器人绑定 / 完整 API / 事件      | `/admin/telegram/chats`、`/admin/telegram/api/:method`、`/admin/telegram/updates`                                                      |
+
+`GET /providers`、`GET /graveyard`、`GET /admin/providers` 返回 `{ items, total, limit, offset }`。机场详情额外返回 `follower_count`、`memorial_count` 和 `following`（未登录为 `null`）。`GET /auth/me` 的 `user` 带 `has_password`，前端据此决定是否允许解绑 Telegram。
 
 登录响应设置 `HttpOnly`、`SameSite=Lax` cookie（生产增加 `Secure`）并返回 `csrfToken`。前端请求启用 `credentials: include`，写操作在 `X-CSRF-Token` 中发送该值；刷新后从 `/auth/me` 读取。建议网站与 API 使用同一主域的子域或同源反代，不支持第三方站点跨站 cookie 登录。非浏览器客户端可从登录响应取会话 cookie，作为 `Authorization: Bearer <session>` 使用。
 

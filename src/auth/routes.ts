@@ -69,8 +69,62 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
     { preHandler: authenticated, schema: { tags: ['auth'] } },
     async (req, reply) => {
       reply.header('Cache-Control', 'no-store');
-      return { user: publicUser(req.user!), csrfToken: req.csrfToken };
+      const [row] = await db.query<{ has_password: boolean }>(
+        'SELECT password_hash IS NOT NULL AS has_password FROM users WHERE id=$1',
+        [req.user!.id],
+      );
+      return {
+        user: { ...publicUser(req.user!), has_password: row!.has_password },
+        csrfToken: req.csrfToken,
+      };
     },
+  );
+  api.patch(
+    '/auth/me',
+    {
+      preHandler: authenticated,
+      schema: {
+        tags: ['auth'],
+        body: Type.Object(
+          { displayName: Type.String({ minLength: 1, maxLength: 80, pattern: '\\S' }) },
+          { additionalProperties: false },
+        ),
+      },
+    },
+    async (req) => {
+      const [user] = await db.query<User>(
+        `UPDATE users SET display_name=$1 WHERE id=$2 RETURNING ${userColumns}`,
+        [req.body.displayName.trim(), req.user!.id],
+      );
+      return { user: publicUser(user!) };
+    },
+  );
+  api.delete(
+    '/auth/telegram',
+    { preHandler: authenticated, schema: { tags: ['auth'] } },
+    async (req) =>
+      db.transaction(async (tx) => {
+        const [current] = await tx.query<{ telegram_id: string | null; has_password: boolean }>(
+          'SELECT telegram_id,(email IS NOT NULL AND password_hash IS NOT NULL) AS has_password FROM users WHERE id=$1 FOR UPDATE',
+          [req.user!.id],
+        );
+        if (!current?.telegram_id)
+          throw new AppError(409, 'NOT_LINKED', 'No Telegram account is linked');
+        if (!current.has_password)
+          throw new AppError(
+            409,
+            'LAST_LOGIN_METHOD',
+            'Set an email and password before unlinking Telegram',
+          );
+        await tx.query("DELETE FROM telegram_chats WHERE id=$1 AND kind='admin'", [
+          current.telegram_id,
+        ]);
+        const [user] = await tx.query<User>(
+          `UPDATE users SET telegram_id=NULL,telegram_subject=NULL WHERE id=$1 RETURNING ${userColumns}`,
+          [req.user!.id],
+        );
+        return { user: publicUser(user!) };
+      }),
   );
   api.post(
     '/auth/logout',
@@ -179,45 +233,57 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
       },
     },
     async (req, reply) => {
-      if (!config.telegramClientId || !config.telegramClientSecret)
-        throw new AppError(503, 'NOT_CONFIGURED', 'Telegram OIDC is not configured');
-      const [challenge] = await db.query<{
-        nonce: string;
-        verifier: string;
-        user_id: string | null;
-        mode: string;
-      }>(
-        'DELETE FROM auth_challenges WHERE state_hash=$1 AND browser_hash=$2 AND expires_at>now() RETURNING *',
-        [digest(req.query.state), digest(req.cookies.tg_state ?? '')],
-      );
-      if (!challenge) throw new AppError(401, 'INVALID_STATE', 'Invalid or expired login state');
-      if (challenge.mode === 'link' && req.user?.id !== challenge.user_id)
-        throw new AppError(401, 'INVALID_STATE', 'Linking session changed');
-      reply.clearCookie('tg_state', { path: '/auth/telegram' });
-      const response = await fetch('https://oauth.telegram.org/token', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          Authorization: `Basic ${Buffer.from(`${config.telegramClientId}:${config.telegramClientSecret}`).toString('base64')}`,
-        },
-        body: new URLSearchParams({
-          grant_type: 'authorization_code',
-          code: req.query.code,
-          client_id: config.telegramClientId,
-          redirect_uri: `${config.publicUrl}/auth/telegram/callback`,
-          code_verifier: decrypt(challenge.verifier, config.appKey),
-        }),
-        signal: AbortSignal.timeout(10000),
-      });
-      if (!response.ok) throw new AppError(401, 'TELEGRAM_AUTH', 'Telegram code exchange failed');
-      const data = (await response.json()) as { id_token: string };
-      const identity = await verifyTelegramIdToken(
-        data.id_token,
-        config.telegramClientId,
-        challenge.nonce,
-      );
-      const user = await telegramUser(db, identity, challenge.user_id ?? undefined);
-      return newSession(db, config, reply, user);
+      // A browser navigation lands back in the web app; API clients keep the JSON response.
+      const browser = req.headers.accept?.includes('text/html') ?? false;
+      try {
+        if (!config.telegramClientId || !config.telegramClientSecret)
+          throw new AppError(503, 'NOT_CONFIGURED', 'Telegram OIDC is not configured');
+        const [challenge] = await db.query<{
+          nonce: string;
+          verifier: string;
+          user_id: string | null;
+          mode: string;
+        }>(
+          'DELETE FROM auth_challenges WHERE state_hash=$1 AND browser_hash=$2 AND expires_at>now() RETURNING *',
+          [digest(req.query.state), digest(req.cookies.tg_state ?? '')],
+        );
+        if (!challenge) throw new AppError(401, 'INVALID_STATE', 'Invalid or expired login state');
+        if (challenge.mode === 'link' && req.user?.id !== challenge.user_id)
+          throw new AppError(401, 'INVALID_STATE', 'Linking session changed');
+        reply.clearCookie('tg_state', { path: '/auth/telegram' });
+        const response = await fetch('https://oauth.telegram.org/token', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Authorization: `Basic ${Buffer.from(`${config.telegramClientId}:${config.telegramClientSecret}`).toString('base64')}`,
+          },
+          body: new URLSearchParams({
+            grant_type: 'authorization_code',
+            code: req.query.code,
+            client_id: config.telegramClientId,
+            redirect_uri: `${config.publicUrl}/auth/telegram/callback`,
+            code_verifier: decrypt(challenge.verifier, config.appKey),
+          }),
+          signal: AbortSignal.timeout(10000),
+        });
+        if (!response.ok) throw new AppError(401, 'TELEGRAM_AUTH', 'Telegram code exchange failed');
+        const data = (await response.json()) as { id_token: string };
+        const identity = await verifyTelegramIdToken(
+          data.id_token,
+          config.telegramClientId,
+          challenge.nonce,
+        );
+        const user = await telegramUser(db, identity, challenge.user_id ?? undefined);
+        const session = await newSession(db, config, reply, user);
+        if (!browser) return session;
+        return reply.redirect(challenge.mode === 'link' ? '/me/security?telegram=linked' : '/me');
+      } catch (error) {
+        if (!browser) throw error;
+        const code = error instanceof AppError ? error.code : 'TELEGRAM_AUTH';
+        return reply.redirect(
+          `${req.user ? '/me/security' : '/login'}?telegram=${encodeURIComponent(code)}`,
+        );
+      }
     },
   );
   api.post(

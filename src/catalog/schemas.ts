@@ -1,4 +1,6 @@
-import { Type, type Static } from '@sinclair/typebox';
+import { FormatRegistry, Type, type Static } from '@sinclair/typebox';
+// Fastify's Ajv knows these formats; Value.Check (used by the bot) needs them registered.
+if (!FormatRegistry.Has('uri')) FormatRegistry.Set('uri', (value) => URL.canParse(value));
 export const Id = Type.Object({ id: Type.String({ format: 'uuid' }) });
 export const Page = {
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, default: 20 })),

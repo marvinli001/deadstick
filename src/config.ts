@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { resolve } from 'node:path';
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   const appKey = env.APP_KEY ?? '';
@@ -16,6 +17,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     );
   if (Boolean(env.TELEGRAM_CLIENT_ID) !== Boolean(env.TELEGRAM_CLIENT_SECRET))
     throw new Error('Set both TELEGRAM_CLIENT_ID and TELEGRAM_CLIENT_SECRET');
+  const botUsername = env.TELEGRAM_BOT_USERNAME?.trim().replace(/^@/, '') || undefined;
+  if (botUsername && !/^[A-Za-z][A-Za-z0-9_]{3,31}$/.test(botUsername))
+    throw new Error('TELEGRAM_BOT_USERNAME must be the bot username without @');
   const probeMode = env.PROBE_MODE ?? 'tcp';
   if (!['tcp', 'proxy'].includes(probeMode)) throw new Error('PROBE_MODE must be tcp or proxy');
   if (probeMode === 'proxy' && !env.MIHOMO_BIN)
@@ -29,7 +33,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     databaseUrl: env.DATABASE_URL ?? 'postgres://localhost:5432/deadstick',
     corsOrigins: (env.CORS_ORIGINS ?? publicUrl).split(',').map((s) => new URL(s.trim()).origin),
     botToken: env.TELEGRAM_BOT_TOKEN,
-    botUsername: env.TELEGRAM_BOT_USERNAME,
+    botUsername,
     webhookSecret: env.TELEGRAM_WEBHOOK_SECRET,
     telegramClientId: env.TELEGRAM_CLIENT_ID,
     telegramClientSecret: env.TELEGRAM_CLIENT_SECRET,
@@ -37,6 +41,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     trustProxy: env.TRUST_PROXY ? env.TRUST_PROXY.split(',').map((s) => s.trim()) : false,
     probeMode: probeMode as 'tcp' | 'proxy',
     mihomoBin: env.MIHOMO_BIN,
+    webDist: resolve(env.WEB_DIST ?? 'web/dist'),
   };
 }
 export type Config = ReturnType<typeof loadConfig>;

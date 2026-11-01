@@ -6,7 +6,13 @@ import type { Config } from '../config.js';
 import { administrator, reviewer } from '../auth/service.js';
 import { AppError, required } from '../errors.js';
 import { token } from '../crypto.js';
-import { audit, resolveIncident } from '../catalog/service.js';
+import {
+  audit,
+  moderateMemorial,
+  openIncident,
+  resolveIncident,
+  reviveProvider,
+} from '../catalog/service.js';
 import { Id, MonitorSettings, Page, Resolution } from '../catalog/schemas.js';
 import { type TelegramSender } from '../telegram/notifications.js';
 
@@ -88,29 +94,7 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
         ),
       },
     },
-    async (req) =>
-      db.transaction(async (tx) => {
-        const p = required(
-          (
-            await tx.query<{ lifecycle: string }>(
-              'SELECT lifecycle FROM providers WHERE id=$1 FOR UPDATE',
-              [req.params.id],
-            )
-          )[0],
-        );
-        if (p.lifecycle === 'dead')
-          throw new AppError(409, 'ALREADY_DEAD', 'Provider already confirmed dead');
-        const [incident] = await tx.query(
-          'INSERT INTO incidents(provider_id,summary) VALUES ($1,$2) RETURNING id',
-          [req.params.id, req.body.summary],
-        );
-        await tx.query(
-          "UPDATE providers SET lifecycle='suspected',config_version=config_version+1 WHERE id=$1",
-          [req.params.id],
-        );
-        await audit(tx, req.user!.id, 'incident.create', incident!.id);
-        return incident;
-      }),
+    (req) => openIncident(db, config, req.params.id, req.body.summary, req.user!.id),
   );
   api.post(
     '/admin/providers/:id/revive',
@@ -131,25 +115,7 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
         ),
       },
     },
-    async (req) =>
-      db.transaction(async (tx) => {
-        const p = required(
-          (
-            await tx.query<{ lifecycle: string }>(
-              'SELECT lifecycle FROM providers WHERE id=$1 FOR UPDATE',
-              [req.params.id],
-            )
-          )[0],
-        );
-        if (p.lifecycle !== 'dead')
-          throw new AppError(409, 'NOT_DEAD', 'Provider is not in the cemetery');
-        await tx.query(
-          "UPDATE providers SET lifecycle='active',health='unknown',death_at=NULL,epitaph=NULL,failure_streak=0,config_version=config_version+1,next_check_at=now(),updated_at=now() WHERE id=$1",
-          [req.params.id],
-        );
-        await audit(tx, req.user!.id, 'provider.revive', req.params.id, req.body);
-        return { ok: true };
-      }),
+    (req) => reviveProvider(db, config, req.params.id, req.body, req.user!.id),
   );
   api.post(
     '/admin/providers/:id/check',
@@ -247,11 +213,22 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
   );
   api.get(
     '/admin/memorials',
-    { preHandler: reviewer, schema: { tags: ['admin'], querystring: Type.Object(Page) } },
+    {
+      preHandler: reviewer,
+      schema: {
+        tags: ['admin'],
+        querystring: Type.Object({
+          ...Page,
+          status: Type.Optional(
+            Type.Union([Type.Literal('pending'), Type.Literal('visible'), Type.Literal('hidden')]),
+          ),
+        }),
+      },
+    },
     async (req) => ({
       items: await db.query(
-        "SELECT m.*,p.name AS provider_name FROM memorials m JOIN providers p ON m.provider_id=p.id WHERE m.status='pending' ORDER BY m.created_at LIMIT $1 OFFSET $2",
-        [req.query.limit ?? 20, req.query.offset ?? 0],
+        'SELECT m.id,m.provider_id,m.user_id,m.body,m.status,m.created_at,p.name AS provider_name,u.display_name AS author_name FROM memorials m JOIN providers p ON m.provider_id=p.id JOIN users u ON u.id=m.user_id WHERE m.status=$1 ORDER BY m.created_at LIMIT $2 OFFSET $3',
+        [req.query.status ?? 'pending', req.query.limit ?? 20, req.query.offset ?? 0],
       ),
     }),
   );
@@ -265,27 +242,27 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
         body: Type.Object({ visible: Type.Boolean() }, { additionalProperties: false }),
       },
     },
-    async (req) =>
-      db.transaction(async (tx) => {
-        required(
-          (
-            await tx.query('UPDATE memorials SET status=$1 WHERE id=$2 RETURNING id', [
-              req.body.visible ? 'visible' : 'hidden',
-              req.params.id,
-            ])
-          )[0],
-        );
-        await audit(tx, req.user!.id, 'memorial.moderate', req.params.id, req.body);
-        return { ok: true };
-      }),
+    (req) => moderateMemorial(db, req.params.id, req.body.visible, req.user!.id),
   );
   api.get(
     '/admin/users',
-    { preHandler: administrator, schema: { tags: ['admin'], querystring: Type.Object(Page) } },
+    {
+      preHandler: administrator,
+      schema: {
+        tags: ['admin'],
+        querystring: Type.Object({
+          ...Page,
+          q: Type.Optional(Type.String({ maxLength: 254 })),
+          role: Type.Optional(
+            Type.Union([Type.Literal('user'), Type.Literal('moderator'), Type.Literal('admin')]),
+          ),
+        }),
+      },
+    },
     async (req) => ({
       items: await db.query(
-        'SELECT id,email,display_name,role,telegram_id,disabled,created_at FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2',
-        [req.query.limit ?? 20, req.query.offset ?? 0],
+        "SELECT id,email,display_name,role,telegram_id,disabled,created_at FROM users WHERE ($1::text IS NULL OR email ILIKE '%'||$1||'%' OR display_name ILIKE '%'||$1||'%' OR telegram_id=$1) AND ($2::text IS NULL OR role=$2) ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+        [req.query.q ?? null, req.query.role ?? null, req.query.limit ?? 20, req.query.offset ?? 0],
       ),
     }),
   );

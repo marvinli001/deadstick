@@ -571,4 +571,303 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
     expect(Object.keys(response.json().paths).length).toBeGreaterThan(35);
     expect((await app.inject({ url: '/health/ready' })).json()).toEqual({ ok: true });
   });
+  function testBot() {
+    const bot = createBot(storage.db, config, {
+      id: 123,
+      is_bot: true,
+      first_name: 'Deadstick',
+      username: 'deadstick_test_bot',
+      can_join_groups: true,
+      can_read_all_group_messages: false,
+      supports_inline_queries: true,
+      can_connect_to_business: false,
+      has_main_web_app: false,
+      has_topics_enabled: false,
+      allows_users_to_create_topics: false,
+      can_manage_bots: false,
+      supports_join_request_queries: false,
+    });
+    const calls: Array<{ method: string; payload: Record<string, unknown> }> = [];
+    bot.api.config.use(async (_prev, method, payload) => {
+      calls.push({ method, payload: payload as Record<string, unknown> });
+      const result =
+        method === 'getChat'
+          ? { id: -100777, type: 'supergroup', title: 'Airport watch' }
+          : method.startsWith('send')
+            ? { message_id: 55, date: 1, chat: { id: 1, type: 'private' } }
+            : true;
+      return { ok: true, result } as never;
+    });
+    return { bot, calls };
+  }
+  const tester = { id: 42, is_bot: false, first_name: 'Tester' };
+  const reviewerUser = { id: 100, is_bot: false, first_name: 'Admin' };
+  const privateChat = (from: typeof tester) => ({
+    id: from.id,
+    type: 'private' as const,
+    first_name: from.first_name,
+  });
+  const text = (update_id: number, from: typeof tester, body: string, extra: object = {}) => ({
+    update_id,
+    message: {
+      message_id: update_id,
+      date: 1,
+      chat: privateChat(from),
+      from,
+      text: body,
+      ...(body.startsWith('/')
+        ? {
+            entities: [
+              { type: 'bot_command' as const, offset: 0, length: body.split(' ')[0]!.length },
+            ],
+          }
+        : {}),
+      ...extra,
+    },
+  });
+  const press = (update_id: number, from: typeof tester, data: string) => ({
+    update_id,
+    callback_query: {
+      id: `cb${update_id}`,
+      from,
+      chat_instance: 'test',
+      data,
+      message: { message_id: 7, date: 1, chat: privateChat(from), text: 'card' },
+    },
+  });
+  it('answers ephemeral group commands privately and escapes catalog HTML', async () => {
+    const p = await provider();
+    await storage.db.query("UPDATE providers SET name='<b>Evil</b> & co' WHERE id=$1", [p.id]);
+    await storage.db.query(
+      "INSERT INTO telegram_chats(id,title,kind) VALUES ('-100123','Allowed','group')",
+    );
+    const { bot, calls } = testBot();
+    await bot.handleUpdate({
+      update_id: 1,
+      message: {
+        message_id: 0,
+        ephemeral_message_id: 9,
+        date: 1,
+        chat: { id: -100123, type: 'supergroup', title: 'Allowed' },
+        from: tester,
+        text: '/status test-airport',
+        entities: [{ type: 'bot_command', offset: 0, length: 7 }],
+      },
+    } as never);
+    const sent = calls.find((c) => c.method === 'sendMessage')!;
+    expect(sent.payload).toMatchObject({
+      parse_mode: 'HTML',
+      ephemeral_message_parameters: { receiver_user_id: 42 },
+      reply_parameters: { ephemeral_message_id: 9 },
+    });
+    expect(sent.payload.text).toContain('&lt;b&gt;Evil&lt;/b&gt; &amp; co');
+    expect(sent.payload.text).not.toContain('<b>Evil');
+  });
+  it('reviews incidents from buttons only after evidence is replied, and clears stale buttons', async () => {
+    const p = await provider();
+    await storage.db.query(
+      "INSERT INTO telegram_chats(id,title,kind) VALUES ('100','Admin','admin')",
+    );
+    await check(p.id, false);
+    await check(p.id, false);
+    const [incident] = await storage.db.query<{ id: string }>(
+      "SELECT id FROM incidents WHERE status='open'",
+    );
+    const [alert] = await storage.db.query<{ subject: string; payload: { reply_markup: unknown } }>(
+      "SELECT subject,payload FROM notifications WHERE chat_id='100'",
+    );
+    expect(alert!.subject).toBe(`incident:${incident!.id}`);
+    expect(JSON.stringify(alert!.payload.reply_markup)).toContain(`rv:d:${incident!.id}`);
+    sender.send.mockResolvedValue({ message_id: 55 });
+    await dispatchNotifications(storage.db, sender);
+    const { bot, calls } = testBot();
+    await bot.handleUpdate(press(1, tester, `rv:d:${incident!.id}`));
+    expect(calls.some((c) => c.method === 'sendMessage')).toBe(false);
+    await bot.handleUpdate(press(2, reviewerUser, `rv:d:${incident!.id}`));
+    const prompt = calls.find((c) => c.method === 'sendMessage')!;
+    expect(prompt.payload.reply_markup).toMatchObject({ force_reply: true });
+    expect((await storage.db.query('SELECT status FROM incidents'))[0]!.status).toBe('open');
+    const promptMessage = {
+      message_id: 56,
+      date: 1,
+      chat: privateChat(reviewerUser),
+      from: { id: 123, is_bot: true, first_name: 'Deadstick' },
+      text: String(prompt.payload.text).replace(/<[^>]+>/g, ''),
+    };
+    await bot.handleUpdate(
+      text(3, reviewerUser, 'not-a-url\n理由', { reply_to_message: promptMessage }) as never,
+    );
+    expect((await storage.db.query('SELECT status FROM incidents'))[0]!.status).toBe('open');
+    await bot.handleUpdate(
+      text(
+        4,
+        reviewerUser,
+        'https://evidence.example/1 https://evidence.example/2\n官网与订阅均已关闭\n墓志铭：一路走好',
+        {
+          reply_to_message: promptMessage,
+        },
+      ) as never,
+    );
+    expect((await storage.db.query('SELECT status,evidence_urls FROM incidents'))[0]).toEqual({
+      status: 'confirmed_dead',
+      evidence_urls: ['https://evidence.example/1', 'https://evidence.example/2'],
+    });
+    expect((await storage.db.query('SELECT epitaph FROM providers'))[0]!.epitaph).toBe('一路走好');
+    expect(
+      await storage.db.query(
+        "SELECT chat_id,payload FROM notifications WHERE method='editMessageReplyMarkup'",
+      ),
+    ).toEqual([
+      { chat_id: '100', payload: { message_id: 55, reply_markup: { inline_keyboard: [] } } },
+    ]);
+  });
+  it('binds groups from the bot and alerts administrators when added to a new group', async () => {
+    await storage.db.query(
+      "INSERT INTO telegram_chats(id,title,kind) VALUES ('100','Admin','admin')",
+    );
+    const { bot, calls } = testBot();
+    const group = {
+      id: -100777,
+      type: 'supergroup' as const,
+      title: 'Airport watch',
+      is_forum: true,
+    };
+    await bot.handleUpdate({
+      update_id: 1,
+      my_chat_member: {
+        chat: group,
+        from: tester,
+        date: 1,
+        old_chat_member: {
+          status: 'left',
+          user: { id: 123, is_bot: true, first_name: 'Deadstick' },
+        },
+        new_chat_member: {
+          status: 'member',
+          user: { id: 123, is_bot: true, first_name: 'Deadstick' },
+        },
+      },
+    } as never);
+    const [alert] = await storage.db.query<{ chat_id: string; payload: object }>(
+      'SELECT chat_id,payload FROM notifications',
+    );
+    expect(alert!.chat_id).toBe('100');
+    expect(JSON.stringify(alert!.payload)).toContain('bind:-100777');
+    const bind = (update_id: number, from: typeof tester) => ({
+      update_id,
+      message: {
+        message_id: update_id,
+        date: 1,
+        chat: group,
+        from,
+        text: '/bind',
+        is_topic_message: true,
+        message_thread_id: 12,
+        entities: [{ type: 'bot_command' as const, offset: 0, length: 5 }],
+      },
+    });
+    await bot.handleUpdate(bind(2, tester) as never);
+    expect(await storage.db.query("SELECT id FROM telegram_chats WHERE kind='group'")).toHaveLength(
+      0,
+    );
+    await bot.handleUpdate(bind(3, reviewerUser) as never);
+    expect(
+      (
+        await storage.db.query("SELECT id,topic_id,enabled FROM telegram_chats WHERE kind='group'")
+      )[0],
+    ).toEqual({
+      id: '-100777',
+      topic_id: 12,
+      enabled: true,
+    });
+    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(2);
+  });
+  it('answers guest mentions with a read-only card', async () => {
+    await provider();
+    const { bot, calls } = testBot();
+    await bot.handleUpdate({
+      update_id: 1,
+      guest_message: {
+        message_id: 1,
+        date: 1,
+        guest_query_id: 'gq1',
+        chat: { id: -100999, type: 'supergroup', title: 'Elsewhere' },
+        from: tester,
+        text: '@deadstick_test_bot test-airport',
+      },
+    } as never);
+    const answer = calls.find((c) => c.method === 'answerGuestQuery')!;
+    expect(answer.payload.guest_query_id).toBe('gq1');
+    expect(JSON.stringify(answer.payload.result)).toContain('测试机场');
+    expect(JSON.stringify(answer.payload.result)).not.toContain('callback_data');
+  });
+  it('routes submissions through reviewer buttons and tells the submitter', async () => {
+    await storage.db.query("UPDATE users SET telegram_id='42' WHERE id=$1", [userId]);
+    await storage.db.query(
+      "INSERT INTO telegram_chats(id,title,kind) VALUES ('100','Admin','admin')",
+    );
+    const created = await app.inject({
+      method: 'POST',
+      url: '/submissions',
+      headers: member,
+      payload: input,
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    const id = created.json().id as string;
+    const [alert] = await storage.db.query<{ payload: object }>(
+      'SELECT payload FROM notifications WHERE subject=$1',
+      [`submission:${id}`],
+    );
+    expect(JSON.stringify(alert!.payload)).toContain(`sb:a:${id}`);
+    expect(JSON.stringify(alert!.payload)).not.toContain('subscription-secret');
+    const { bot } = testBot();
+    await bot.handleUpdate(press(1, reviewerUser, `sb:a:${id}`));
+    expect((await storage.db.query('SELECT status,provider_id FROM submissions'))[0]!.status).toBe(
+      'approved',
+    );
+    const [result] = await storage.db.query<{ payload: { text: string } }>(
+      "SELECT payload FROM notifications WHERE chat_id='42'",
+    );
+    expect(result!.payload.text).toContain('投稿已通过');
+  });
+  it('accepts bot submissions in private chats only', async () => {
+    const { bot, calls } = testBot();
+    const command =
+      '/submit 机器人机场 | bot-airport | https://bot.example.com https://www.bot.example.com';
+    await bot.handleUpdate(text(1, tester, command) as never);
+    await bot.handleUpdate(text(1, tester, command) as never);
+    const [row] = await storage.db.query<{ payload: { endpoints: unknown[] } }>(
+      'SELECT payload FROM submissions',
+    );
+    expect(row!.payload.endpoints).toHaveLength(2);
+    expect(await storage.db.query('SELECT id FROM submissions')).toHaveLength(1);
+    expect(String(calls.at(-1)!.payload.text)).toContain('投稿已提交');
+  });
+  it('serves slug detail with follow state, list totals, profile edits and Telegram unlinking', async () => {
+    const p = await provider();
+    await app.inject({ method: 'PUT', url: `/providers/${p.id}/follow`, headers: member });
+    const detail = await app.inject({ url: '/providers/slug/test-airport', headers: member });
+    expect(detail.json()).toMatchObject({ id: p.id, following: true, follower_count: 1 });
+    expect((await app.inject({ url: '/providers/slug/test-airport' })).json().following).toBeNull();
+    expect((await app.inject({ url: '/providers?limit=1' })).json()).toMatchObject({
+      total: 1,
+      limit: 1,
+    });
+    const renamed = await app.inject({
+      method: 'PATCH',
+      url: '/auth/me',
+      headers: member,
+      payload: { displayName: ' 新名字 ' },
+    });
+    expect(renamed.json().user.display_name).toBe('新名字');
+    expect(
+      (await app.inject({ method: 'DELETE', url: '/auth/telegram', headers: member })).statusCode,
+    ).toBe(409);
+    await storage.db.query(
+      "INSERT INTO telegram_chats(id,title,kind) VALUES ('100','Admin','admin')",
+    );
+    const unlinked = await app.inject({ method: 'DELETE', url: '/auth/telegram', headers: admin });
+    expect(unlinked.json().user.telegram_id).toBeNull();
+    expect(await storage.db.query("SELECT id FROM telegram_chats WHERE id='100'")).toHaveLength(0);
+  });
 });

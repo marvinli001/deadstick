@@ -25,7 +25,8 @@
 ## Telegram
 
 - [ ] Mini App 前端页面，接入 `POST /auth/telegram/miniapp`。
-- [ ] 使用真实 BotFather 配置联调：webhook、命令菜单、inline 模式、群白名单与论坛 topic 通知、私聊复核。
+- [ ] 使用真实 BotFather 配置按 [docs/telegram.md](docs/telegram.md) 联调：webhook、分作用域命令菜单、inline 与 Guest Mode、群内 ephemeral 命令与 15 秒回复时限、`/bind` 与论坛话题通知、按钮复核与 force reply、rich message 检测报告在各客户端的显示。
+- [ ] 审核员角色在后台变更时同步其私聊命令菜单（目前在 `/notify` 与 `telegram:setup` 时更新）。
 
 ## 检测
 
