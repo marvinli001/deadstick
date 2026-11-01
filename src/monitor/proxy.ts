@@ -146,7 +146,8 @@ export async function probeProxy(
     while (!(await portReady(port))) {
       if (startError || child.exitCode !== null || child.signalCode !== null)
         throw new AppError(503, 'PROBE_ENGINE_ERROR', 'Probe engine could not start');
-      if (Date.now() >= deadline) return false;
+      if (Date.now() >= deadline)
+        throw new AppError(503, 'PROBE_ENGINE_ERROR', 'Probe engine startup timed out');
       await sleep(30);
     }
     agent = new ProxyAgent(`http://127.0.0.1:${port}`);

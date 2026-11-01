@@ -17,7 +17,7 @@ jobs:
           POSTGRES_DB: deadstick_test
         ports: ['5432:5432']
         options: >-
-          --health-cmd 'pg_isready -U deadstick -d deadstick_test'
+          --health-cmd "pg_isready -U deadstick -d deadstick_test"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       TEST_DATABASE_URL: postgres://deadstick:deadstick@localhost:5432/deadstick_test
@@ -41,7 +41,8 @@ jobs:
           import {writeFileSync} from 'node:fs';
           import {randomBytes} from 'node:crypto';
           const password=randomBytes(24).toString('hex');
-          writeFileSync('.env',`NODE_ENV=production\nAPP_KEY=${randomBytes(32).toString('base64')}\nPOSTGRES_PASSWORD=${password}\nDATABASE_URL=postgres://deadstick:${password}@postgres:5432/deadstick\nPUBLIC_URL=https://example.com\nPROBE_MODE=proxy\nMIHOMO_BIN=/usr/local/bin/mihomo\n`);
+          const values={NODE_ENV:'production',APP_KEY:randomBytes(32).toString('base64'),POSTGRES_PASSWORD:password,DATABASE_URL:`postgres://deadstick:${password}@postgres:5432/deadstick`,PUBLIC_URL:'https://example.com',PROBE_MODE:'proxy',MIHOMO_BIN:'/usr/local/bin/mihomo'};
+          writeFileSync('.env',Object.entries(values).map(([key,value])=>`${key}=${value}`).join(String.fromCharCode(10)));
           JS
           docker compose up -d --no-build --wait --wait-timeout 90
           curl --fail http://127.0.0.1:3000/health/ready
@@ -55,7 +56,7 @@ jobs:
           JS
       - name: Container diagnostics
         if: failure()
-        run: docker compose logs --tail 80
+        run: if test -f .env; then docker compose logs --tail 80; fi
       - name: Stop deployed services
         if: always()
-        run: docker compose down -v --remove-orphans
+        run: if test -f .env; then docker compose down -v --remove-orphans; fi

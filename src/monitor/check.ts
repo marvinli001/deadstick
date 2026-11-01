@@ -4,6 +4,7 @@ import type { MonitorSettings } from '../catalog/schemas.js';
 import { safeFetch, probeTcp, networkError } from './network.js';
 import { parseSubscription, subscriptionLimits } from './subscription.js';
 import { probeProxy } from './proxy.js';
+import { AppError } from '../errors.js';
 
 export interface Endpoint {
   id: string;
@@ -59,8 +60,13 @@ export function checker(config: Config): CheckEndpoint {
         );
         result.sampledNodes = count;
         const reachable: boolean[] = [];
+        let probeError: string | undefined;
         result.probeMode = config.probeMode;
         for (const node of samples) {
+          if (Date.now() >= start + settings.checkTimeoutMs) {
+            reachable.push(false);
+            continue;
+          }
           const budget = Math.max(
             1,
             Math.min(
@@ -70,11 +76,20 @@ export function checker(config: Config): CheckEndpoint {
               ),
             ),
           );
-          reachable.push(
-            config.probeMode === 'proxy'
-              ? await probeProxy(node, config.mihomoBin!, budget)
-              : await probeTcp(node.host, node.port, budget),
-          );
+          try {
+            reachable.push(
+              config.probeMode === 'proxy'
+                ? await probeProxy(node, config.mihomoBin!, budget)
+                : await probeTcp(node.host, node.port, budget),
+            );
+          } catch (error) {
+            if (
+              error instanceof AppError &&
+              ['UNSUPPORTED_PROXY', 'PROBE_ENGINE_ERROR'].includes(error.code)
+            )
+              probeError = error.code;
+            reachable.push(false);
+          }
         }
         result.reachableNodes = reachable.filter(Boolean).length;
         result.ok =
@@ -84,7 +99,7 @@ export function checker(config: Config): CheckEndpoint {
             ? 'SUBSCRIPTION_EXPIRED'
             : limits.quotaExhausted
               ? 'QUOTA_EXHAUSTED'
-              : 'NODES_UNREACHABLE';
+              : (probeError ?? 'NODES_UNREACHABLE');
       }
     } catch (error) {
       result.errorCode = networkError(error);

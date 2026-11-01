@@ -88,41 +88,33 @@ export async function buildApp(
         .code(error.statusCode)
         .send({ error: { code: error.code, message: error.message }, requestId: req.id });
     if (error instanceof TelegramError)
-      return reply
-        .code(502)
-        .send({
-          error: { code: `TELEGRAM_${error.code}`, message: 'Telegram rejected the API request' },
-          requestId: req.id,
-        });
+      return reply.code(502).send({
+        error: { code: `TELEGRAM_${error.code}`, message: 'Telegram rejected the API request' },
+        requestId: req.id,
+      });
     const e = error as { validation?: unknown; code?: string; statusCode?: number; name?: string };
     if (e.validation)
-      return reply
-        .code(400)
-        .send({
-          error: { code: 'VALIDATION', message: 'Request does not match the API schema' },
-          requestId: req.id,
-        });
+      return reply.code(400).send({
+        error: { code: 'VALIDATION', message: 'Request does not match the API schema' },
+        requestId: req.id,
+      });
     if (e.code === '23505')
       return reply
         .code(409)
         .send({ error: { code: 'CONFLICT', message: 'Record already exists' }, requestId: req.id });
     if (e.code === '23503')
-      return reply
-        .code(404)
-        .send({
-          error: { code: 'NOT_FOUND', message: 'Referenced resource not found' },
-          requestId: req.id,
-        });
+      return reply.code(404).send({
+        error: { code: 'NOT_FOUND', message: 'Referenced resource not found' },
+        requestId: req.id,
+      });
     if (e.statusCode && e.statusCode < 500)
-      return reply
-        .code(e.statusCode)
-        .send({
-          error: {
-            code: e.code ?? 'BAD_REQUEST',
-            message: e.statusCode === 429 ? 'Too many requests' : 'Request rejected',
-          },
-          requestId: req.id,
-        });
+      return reply.code(e.statusCode).send({
+        error: {
+          code: e.code ?? 'BAD_REQUEST',
+          message: e.statusCode === 429 ? 'Too many requests' : 'Request rejected',
+        },
+        requestId: req.id,
+      });
     req.log.error({ errorType: e.name, errorCode: e.code }, 'Request failed');
     return reply
       .code(500)
