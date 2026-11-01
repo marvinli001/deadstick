@@ -2,7 +2,7 @@
   "name": "deadstick",
   "version": "0.1.0",
   "private": true,
-  "description": "Airport watch, incident verification and a cyber cemetery — TypeScript backend",
+  "description": "Airport watch, incident verification and a cyber cemetery",
   "type": "module",
   "engines": {
     "node": ">=24 <27"

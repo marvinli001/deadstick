@@ -1,6 +1,6 @@
 # Deadstick
 
-机场存活监测、人工复核、Telegram 通报与赛博墓园的 **TypeScript 后端**。没有网站或管理后台的视觉页面；前端通过 REST API 接入，交互文档位于 `/docs`，OpenAPI 位于 `/openapi.json`。
+机场存活监测、人工复核、Telegram 通报与赛博墓园。前端通过 REST API 接入，交互文档位于 `/docs`，OpenAPI 位于 `/openapi.json`。
 
 ## 已实现
 
