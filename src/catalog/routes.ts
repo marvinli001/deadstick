@@ -267,6 +267,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
         tags: ['admin'],
         querystring: Type.Object({
           ...Page,
+          id: Type.Optional(Id.properties.id),
           status: Type.Optional(
             Type.Union([
               Type.Literal('pending'),
@@ -279,8 +280,13 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     },
     async (req) => ({
       items: await db.query(
-        "SELECT id,user_id,payload - 'endpoints' AS provider,jsonb_array_length(payload->'endpoints') AS endpoint_count,status,reason,created_at FROM submissions WHERE status=$1 ORDER BY created_at LIMIT $2 OFFSET $3",
-        [req.query.status ?? 'pending', req.query.limit ?? 20, req.query.offset ?? 0],
+        "SELECT id,user_id,payload - 'endpoints' AS provider,jsonb_array_length(payload->'endpoints') AS endpoint_count,status,reason,created_at FROM submissions WHERE ($4::uuid IS NOT NULL AND id=$4 OR $4::uuid IS NULL AND status=$1) ORDER BY created_at LIMIT $2 OFFSET $3",
+        [
+          req.query.status ?? 'pending',
+          req.query.limit ?? 20,
+          req.query.offset ?? 0,
+          req.query.id ?? null,
+        ],
       ),
     }),
   );

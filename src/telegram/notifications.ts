@@ -12,7 +12,10 @@ import {
   reviewKeyboard,
   startLink,
   tributeRow,
+  time,
 } from './format.js';
+
+type Audience = 'public' | 'group' | 'follower' | 'reviewer' | 'admin';
 
 export async function enqueue(
   db: DB,
@@ -20,10 +23,10 @@ export async function enqueue(
   chatId: string,
   payload: object,
   topicId: number | null = null,
-  options: { method?: string; subject?: string } = {},
+  options: { method?: string; subject?: string; audience?: Audience } = {},
 ) {
   await db.query(
-    'INSERT INTO notifications(dedupe_key,chat_id,topic_id,payload,method,subject) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING',
+    'INSERT INTO notifications(dedupe_key,chat_id,topic_id,payload,method,subject,audience) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING',
     [
       key,
       chatId,
@@ -31,17 +34,23 @@ export async function enqueue(
       JSON.stringify(payload),
       options.method ?? 'sendMessage',
       options.subject ?? null,
+      options.audience ?? 'public',
     ],
   );
 }
 interface Outgoing {
   text: string;
+  rich?: string;
   reply_markup?: InlineKeyboardMarkup;
 }
 const html = (message: Outgoing) => ({
-  text: message.text,
-  parse_mode: 'HTML',
-  link_preview_options: { is_disabled: true },
+  ...(message.rich
+    ? { rich_message: { html: message.rich, skip_entity_detection: true } }
+    : {
+        text: message.text,
+        parse_mode: 'HTML',
+        link_preview_options: { is_disabled: true },
+      }),
   ...(message.reply_markup?.inline_keyboard.length ? { reply_markup: message.reply_markup } : {}),
 });
 const reviewerChats = (db: DB) =>
@@ -73,27 +82,43 @@ async function broadcast(
       db,
       `${key}:${chat.id}`,
       chat.id,
-      html(reviewer ? { text: message.text, reply_markup: review.reply_markup } : message),
+      html(reviewer ? { ...message, reply_markup: review.reply_markup } : message),
       chat.topic_id,
-      { subject: reviewer ? review.subject : undefined },
+      {
+        subject: reviewer ? review.subject : undefined,
+        method: message.rich ? 'sendRichMessage' : 'sendMessage',
+        audience: chat.kind === 'admin' ? 'reviewer' : (chat.kind as Audience),
+      },
     );
   }
 }
 async function notifyReviewers(db: DB, key: string, subject: string, message: Outgoing) {
   for (const chat of await reviewerChats(db))
-    await enqueue(db, `${key}:${chat.id}`, chat.id, html(message), null, { subject });
+    await enqueue(db, `${key}:${chat.id}`, chat.id, html(message), null, {
+      subject,
+      method: message.rich ? 'sendRichMessage' : 'sendMessage',
+      audience: 'reviewer',
+    });
 }
 /** Chat binding is an administrator action, so these alerts skip moderators. */
 export async function notifyAdmins(db: DB, key: string, message: Outgoing) {
   const chats = await db.query<{ id: string }>(
     "SELECT c.id FROM telegram_chats c JOIN users u ON u.telegram_id=c.id WHERE c.kind='admin' AND c.enabled AND u.role='admin' AND NOT u.disabled",
   );
-  for (const chat of chats) await enqueue(db, `${key}:${chat.id}`, chat.id, html(message));
+  for (const chat of chats)
+    await enqueue(db, `${key}:${chat.id}`, chat.id, html(message), null, {
+      method: message.rich ? 'sendRichMessage' : 'sendMessage',
+      audience: 'admin',
+    });
 }
 /** Removes the action buttons from review messages that were already delivered. */
 export async function clearReviewButtons(db: DB, subject: string) {
+  await db.query(
+    "UPDATE notifications SET payload=payload-'reply_markup' WHERE subject=$1 AND status='pending' AND method IN ('sendMessage','sendRichMessage')",
+    [subject],
+  );
   const sent = await db.query<{ chat_id: string; message_id: string }>(
-    "SELECT chat_id,message_id FROM notifications WHERE subject=$1 AND status='sent' AND message_id IS NOT NULL AND method='sendMessage'",
+    "SELECT chat_id,message_id FROM notifications WHERE subject=$1 AND status='sent' AND message_id IS NOT NULL AND method IN ('sendMessage','sendRichMessage')",
     [subject],
   );
   for (const row of sent)
@@ -113,6 +138,8 @@ export interface ProviderRef {
   slug: string;
 }
 const headline = (p: ProviderRef) => `${escape(p.name)} · <code>${escape(p.slug)}</code>`;
+const noticeRich = (title: string, p: ProviderRef, body: string) =>
+  `<h2>${title}</h2><p>${headline(p)}</p>${body}<footer>Deadstick · ${time(new Date())}</footer>`;
 const detailUrl = (config: Config, p: ProviderRef) =>
   miniAppLink(config, `p_${compactId(p.id)}`) ??
   startLink(config.botUsername, `p_${compactId(p.id)}`);
@@ -137,10 +164,18 @@ export async function notifyIncidentOpened(
     db,
     p.id,
     `incident:${incidentId}`,
-    { text, reply_markup: markup([detailRow(config, p)]) },
+    {
+      text,
+      rich: noticeRich(
+        '⚠️ 检测异常',
+        p,
+        `<p><mark>尚未确认跑路</mark> · 等待人工核验</p><details><summary>检测详情</summary><p>${escape(clip(summary, 1500))}</p></details>`,
+      ),
+      reply_markup: markup([detailRow(config, p)]),
+    },
     {
       subject: `incident:${incidentId}`,
-      reply_markup: reviewKeyboard(incidentId, detailUrl(config, p)),
+      reply_markup: reviewKeyboard(incidentId, miniAppLink(config, `i_${compactId(incidentId)}`)),
     },
   );
 }
@@ -148,6 +183,7 @@ export async function notifyRecovery(db: DB, config: Config, p: ProviderRef, inc
   await clearReviewButtons(db, `incident:${incidentId}`);
   await broadcast(db, p.id, `recovery:${incidentId}`, {
     text: `✅ <b>检测恢复</b>\n${headline(p)}\n网站和订阅已通过当前检测，本次异常自动关闭。`,
+    rich: noticeRich('✅ 检测恢复', p, '<p>网站和订阅已通过当前检测，本次异常自动关闭。</p>'),
     reply_markup: markup([detailRow(config, p)]),
   });
 }
@@ -172,6 +208,11 @@ export async function notifyResolution(
   const ceremony = startLink(config.botUsername, `c_${compactId(p.id)}`);
   await broadcast(db, p.id, `resolution:${incidentId}`, {
     text: `${title}\n${headline(p)}\n<blockquote>${escape(clip(resolution.reason, 1500))}</blockquote>\n${evidence(resolution.evidenceUrls)}`,
+    rich: noticeRich(
+      title.replace(/<[^>]+>/g, ''),
+      p,
+      `<blockquote>${escape(clip(resolution.reason, 1500))}</blockquote><details><summary>核验证据 · ${resolution.evidenceUrls.length} 项</summary><ul>${resolution.evidenceUrls.map((u, i) => `<li><a href="${escape(u)}">证据 ${i + 1}</a></li>`).join('')}</ul></details>`,
+    ),
     reply_markup: dead
       ? markup([
           tributeRow(p.id),
@@ -186,6 +227,11 @@ export async function notifyResolution(
 export async function notifyRevival(db: DB, config: Config, p: ProviderRef, reason: string) {
   await broadcast(db, p.id, `revival:${p.id}:${Date.now()}`, {
     text: `🌱 <b>墓碑复活</b>\n${headline(p)}\n经人工核验仍在运营，已移出墓园并重新开始监测。\n<blockquote>${escape(clip(reason, 1500))}</blockquote>`,
+    rich: noticeRich(
+      '🌱 墓碑复活',
+      p,
+      `<p>经人工核验仍在运营，已移出墓园并重新开始监测。</p><blockquote>${escape(clip(reason, 1500))}</blockquote>`,
+    ),
     reply_markup: markup([detailRow(config, p)]),
   });
 }
@@ -202,6 +248,7 @@ export async function notifySubmission(
   },
 ) {
   await notifyReviewers(db, `submission:${submission.id}`, `submission:${submission.id}`, {
+    rich: `<h2>📮 新投稿待审核</h2><p><b>${escape(submission.name)}</b> · <code>${escape(submission.slug)}</code></p><table bordered compact><tr><th>官网</th><td>${escape(clip(submission.hosts.join('、') || '—', 1500))}</td></tr><tr><th>订阅</th><td>${submission.subscriptions} 个 · 加密保存</td></tr><tr><th>投稿人</th><td>${escape(submission.author)}</td></tr></table>`,
     text: [
       '📮 <b>新投稿待审核</b>',
       `${escape(submission.name)} · <code>${escape(submission.slug)}</code>`,
@@ -214,7 +261,7 @@ export async function notifySubmission(
         { text: '✅ 通过', callback_data: `sb:a:${submission.id}`, style: 'success' },
         { text: '❌ 驳回', callback_data: `sb:r:${submission.id}`, style: 'danger' },
       ],
-      miniAppButton(config, '🗂 打开审核台', 'review_submissions'),
+      miniAppButton(config, '🗂 打开审核台', `s_${compactId(submission.id)}`),
     ]),
   });
 }
@@ -236,8 +283,11 @@ export async function notifySubmissionResult(
     user.telegram_id,
     html({
       text: `${submission.approved ? '✅ <b>投稿已通过</b>' : '❌ <b>投稿未通过</b>'}\n${escape(submission.name)}\n<blockquote>${escape(clip(submission.reason, 1000))}</blockquote>`,
+      rich: `<h2>${submission.approved ? '✅ 投稿已通过' : '❌ 投稿未通过'}</h2><p>${escape(submission.name)}</p><blockquote>${escape(clip(submission.reason, 1000))}</blockquote>`,
       reply_markup: provider ? markup([detailRow(config, provider)]) : undefined,
     }),
+    null,
+    { method: 'sendRichMessage', audience: 'follower' },
   );
 }
 export async function notifyMemorial(
@@ -246,6 +296,7 @@ export async function notifyMemorial(
 ) {
   await notifyReviewers(db, `memorial:${memorial.id}`, `memorial:${memorial.id}`, {
     text: `🕯 <b>追悼留言待审核</b>\n${escape(memorial.provider)}\n<blockquote>${escape(clip(memorial.body, 1000))}</blockquote>\n作者：${escape(memorial.author)}`,
+    rich: `<h2>🕯 追悼留言待审核</h2><p>${escape(memorial.provider)}</p><blockquote expandable>${escape(clip(memorial.body, 1000))}</blockquote><footer>作者：${escape(memorial.author)}</footer>`,
     reply_markup: markup([
       [
         { text: '👁 公开', callback_data: `mm:v:${memorial.id}`, style: 'success' },
@@ -298,6 +349,8 @@ export async function dispatchNotifications(db: DB, sender: TelegramSender, limi
     payload: Record<string, unknown>;
     lease_token: string;
     attempts: number;
+    audience: Audience;
+    subject: string | null;
   }>(
     `WITH picked AS (SELECT id FROM notifications WHERE attempts<8 AND available_at<=now() AND (status='pending' OR status='running' AND lease_until<now()) ORDER BY available_at FOR UPDATE SKIP LOCKED LIMIT $1) UPDATE notifications n SET status='running',attempts=attempts+1,lease_token=gen_random_uuid(),lease_until=now()+interval '5 minutes' FROM picked WHERE n.id=picked.id RETURNING n.*`,
     [limit],
@@ -305,7 +358,33 @@ export async function dispatchNotifications(db: DB, sender: TelegramSender, limi
   // Sequential delivery keeps each worker comfortably below Telegram's global rate limit.
   for (const n of rows) {
     try {
+      if (n.audience !== 'public') {
+        const [recipient] = await db.query<{ allowed: boolean }>(
+          `SELECT CASE WHEN $2='group' THEN EXISTS(SELECT 1 FROM telegram_chats WHERE id=$1 AND kind='group' AND enabled)
+           ELSE EXISTS(SELECT 1 FROM users u WHERE u.telegram_id=$1 AND NOT u.disabled AND
+             ($2='follower' OR u.role=ANY(CASE WHEN $2='admin' THEN ARRAY['admin'] ELSE ARRAY['admin','moderator'] END)
+              AND EXISTS(SELECT 1 FROM telegram_chats c WHERE c.id=$1 AND c.kind='admin' AND c.enabled))) END AS allowed`,
+          [n.chat_id, n.audience],
+        );
+        if (!recipient!.allowed) {
+          await db.query(
+            "UPDATE notifications SET status='failed',error_code='RECIPIENT_REVOKED',lease_until=NULL WHERE id=$1 AND lease_token=$2",
+            [n.id, n.lease_token],
+          );
+          continue;
+        }
+      }
       let parameters: Record<string, unknown> = { ...n.payload, chat_id: n.chat_id };
+      if (n.subject && ['sendMessage', 'sendRichMessage'].includes(n.method)) {
+        const [kind, id] = n.subject.split(':');
+        const [open] = await db.query<{ pending: boolean }>(
+          `SELECT EXISTS(SELECT 1 FROM incidents WHERE $1='incident' AND id=$2 AND status='open')
+            OR EXISTS(SELECT 1 FROM submissions WHERE $1='submission' AND id=$2 AND status='pending')
+            OR EXISTS(SELECT 1 FROM memorials WHERE $1='memorial' AND id=$2 AND status='pending') AS pending`,
+          [kind, id],
+        );
+        if (!open!.pending) delete parameters.reply_markup;
+      }
       if (n.method === 'setMyCommands') {
         const [user] = await db.query<{ role: string; disabled: boolean }>(
           'SELECT role,disabled FROM users WHERE telegram_id=$1',
@@ -318,7 +397,9 @@ export async function dispatchNotifications(db: DB, sender: TelegramSender, limi
       }
       const result = await sender.send(n.method, {
         ...parameters,
-        ...(n.topic_id && n.method === 'sendMessage' ? { message_thread_id: n.topic_id } : {}),
+        ...(n.topic_id && ['sendMessage', 'sendRichMessage'].includes(n.method)
+          ? { message_thread_id: n.topic_id }
+          : {}),
       });
       const messageId =
         result && typeof result === 'object' && 'message_id' in result

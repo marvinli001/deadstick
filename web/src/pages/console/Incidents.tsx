@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { Alert } from '@/components/arc/alert/alert';
 import { Button } from '@/components/arc/button/button';
@@ -122,9 +122,23 @@ function ResolveForm({ incident, onDone }: { incident: AdminIncident; onDone: ()
 }
 
 export default function Incidents() {
+  const [params, setParams] = useSearchParams();
+  const target = params.get('id');
   const [status, setStatus] = useState<Status>('open');
-  const [active, setActive] = useState<AdminIncident | null>(null);
-  const list = usePaged<AdminIncident>(['admin', 'incidents'], '/admin/incidents', { status });
+  const [selected, setActive] = useState<AdminIncident | null>(null);
+  const list = usePaged<AdminIncident>(['admin', 'incidents'], '/admin/incidents', {
+    status,
+    id: target ?? undefined,
+  });
+  const active =
+    selected ??
+    (target && list.items[0]?.id === target && list.items[0].status === 'open'
+      ? list.items[0]
+      : null);
+  const close = () => {
+    setActive(null);
+    setParams({}, { replace: true });
+  };
 
   return (
     <>
@@ -135,6 +149,7 @@ export default function Incidents() {
           options={statuses}
           onChange={(v) => {
             setStatus(v);
+            setParams({}, { replace: true });
             list.reset();
           }}
         />
@@ -181,11 +196,9 @@ export default function Incidents() {
         </ul>
       )}
       {list.pager}
-      <Dialog open={Boolean(active)} onOpenChange={(open) => !open && setActive(null)}>
+      <Dialog open={Boolean(active)} onOpenChange={(open) => !open && close()}>
         <DialogContent title={active ? `核验 ${active.provider_name}` : '核验'}>
-          {active && (
-            <ResolveForm key={active.id} incident={active} onDone={() => setActive(null)} />
-          )}
+          {active && <ResolveForm key={active.id} incident={active} onDone={close} />}
         </DialogContent>
       </Dialog>
     </>

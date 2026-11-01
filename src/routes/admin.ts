@@ -91,6 +91,7 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
         tags: ['admin'],
         querystring: Type.Object({
           ...Page,
+          id: Type.Optional(Id.properties.id),
           status: Type.Optional(
             Type.Union([
               Type.Literal('open'),
@@ -104,8 +105,13 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
     },
     async (req) => ({
       items: await db.query(
-        'SELECT i.*,p.name AS provider_name FROM incidents i JOIN providers p ON i.provider_id=p.id WHERE i.status=$1 ORDER BY i.created_at DESC LIMIT $2 OFFSET $3',
-        [req.query.status ?? 'open', req.query.limit ?? 20, req.query.offset ?? 0],
+        'SELECT i.*,p.name AS provider_name FROM incidents i JOIN providers p ON i.provider_id=p.id WHERE ($4::uuid IS NOT NULL AND i.id=$4 OR $4::uuid IS NULL AND i.status=$1) ORDER BY i.created_at DESC LIMIT $2 OFFSET $3',
+        [
+          req.query.status ?? 'open',
+          req.query.limit ?? 20,
+          req.query.offset ?? 0,
+          req.query.id ?? null,
+        ],
       ),
     }),
   );
@@ -252,6 +258,7 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
         tags: ['admin'],
         querystring: Type.Object({
           ...Page,
+          id: Type.Optional(Id.properties.id),
           status: Type.Optional(
             Type.Union([Type.Literal('pending'), Type.Literal('visible'), Type.Literal('hidden')]),
           ),
@@ -260,8 +267,13 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
     },
     async (req) => ({
       items: await db.query(
-        'SELECT m.id,m.provider_id,m.user_id,m.body,m.status,m.created_at,p.name AS provider_name,u.display_name AS author_name FROM memorials m JOIN providers p ON m.provider_id=p.id JOIN users u ON u.id=m.user_id WHERE m.status=$1 ORDER BY m.created_at LIMIT $2 OFFSET $3',
-        [req.query.status ?? 'pending', req.query.limit ?? 20, req.query.offset ?? 0],
+        'SELECT m.id,m.provider_id,m.user_id,m.body,m.status,m.created_at,p.name AS provider_name,u.display_name AS author_name FROM memorials m JOIN providers p ON m.provider_id=p.id JOIN users u ON u.id=m.user_id WHERE ($4::uuid IS NOT NULL AND m.id=$4 OR $4::uuid IS NULL AND m.status=$1) ORDER BY m.created_at LIMIT $2 OFFSET $3',
+        [
+          req.query.status ?? 'pending',
+          req.query.limit ?? 20,
+          req.query.offset ?? 0,
+          req.query.id ?? null,
+        ],
       ),
     }),
   );

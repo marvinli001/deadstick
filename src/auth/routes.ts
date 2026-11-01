@@ -30,6 +30,10 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
   api.get('/auth/telegram/config', { schema: { tags: ['auth'] } }, async () => ({
     bot_username: config.botUsername ?? null,
     oidc_enabled: Boolean(config.telegramClientId && config.telegramClientSecret),
+    miniapp_enabled: Boolean(
+      config.botToken && config.botUsername && config.publicUrl.startsWith('https://'),
+    ),
+    miniapp_url: config.botUsername ? `https://t.me/${config.botUsername}?startapp=me` : null,
   }));
   api.post(
     '/auth/register',
@@ -224,7 +228,10 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
   }
   api.get(
     '/auth/telegram/start',
-    { schema: { tags: ['auth'], querystring: destination } },
+    {
+      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+      schema: { tags: ['auth'], querystring: destination },
+    },
     (req, reply) => start('login', req, reply, req.query.next),
   );
   api.post(
@@ -235,17 +242,22 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
   api.get(
     '/auth/telegram/callback',
     {
+      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
       schema: {
         tags: ['auth'],
         querystring: Type.Object({
           state: Type.String({ maxLength: 128 }),
-          code: Type.String({ maxLength: 4096 }),
+          code: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
+          error: Type.Optional(Type.String({ maxLength: 128 })),
+          error_description: Type.Optional(Type.String({ maxLength: 1024 })),
         }),
       },
     },
     async (req, reply) => {
       // A browser navigation lands back in the web app; API clients keep the JSON response.
       const browser = req.headers.accept?.includes('text/html') ?? false;
+      let returnPath: string | null = null;
+      let linking = false;
       try {
         if (!config.telegramClientId || !config.telegramClientSecret)
           throw new AppError(503, 'NOT_CONFIGURED', 'Telegram OIDC is not configured');
@@ -260,9 +272,18 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
           [digest(req.query.state), digest(req.cookies.tg_state ?? '')],
         );
         if (!challenge) throw new AppError(401, 'INVALID_STATE', 'Invalid or expired login state');
+        returnPath = challenge.return_path;
+        linking = challenge.mode === 'link';
         if (challenge.mode === 'link' && req.user?.id !== challenge.user_id)
           throw new AppError(401, 'INVALID_STATE', 'Linking session changed');
         reply.clearCookie('tg_state', { path: '/auth/telegram' });
+        if (req.query.error)
+          throw new AppError(
+            401,
+            req.query.error === 'access_denied' ? 'TELEGRAM_CANCELLED' : 'TELEGRAM_AUTH',
+            'Telegram authorization was not completed',
+          );
+        if (!req.query.code) throw new AppError(401, 'TELEGRAM_AUTH', 'Missing authorization code');
         const response = await fetch('https://oauth.telegram.org/token', {
           method: 'POST',
           headers: {
@@ -296,9 +317,9 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
       } catch (error) {
         if (!browser) throw error;
         const code = error instanceof AppError ? error.code : 'TELEGRAM_AUTH';
-        return reply.redirect(
-          `${req.user ? '/me/security' : '/login'}?telegram=${encodeURIComponent(code)}`,
-        );
+        const params = new URLSearchParams({ telegram: code });
+        if (returnPath && !linking) params.set('next', returnPath);
+        return reply.redirect(`${linking ? '/me/security' : '/login'}?${params}`);
       }
     },
   );

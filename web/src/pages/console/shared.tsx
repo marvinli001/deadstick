@@ -120,20 +120,21 @@ export function usePaged<T>(
   query: Record<string, string | undefined> = {},
 ) {
   const [offset, setOffset] = useState(0);
+  const pageOffset = query.id ? 0 : offset;
   const result = useQuery({
-    queryKey: [...key, query, offset],
-    queryFn: () => api<Page<T>>(path, { query: { ...query, limit: PAGE, offset } }),
-    placeholderData: keepPreviousData,
+    queryKey: [...key, query, pageOffset],
+    queryFn: () => api<Page<T>>(path, { query: { ...query, limit: PAGE, offset: pageOffset } }),
+    placeholderData: query.id ? undefined : keepPreviousData,
   });
   const items = result.data?.items ?? [];
   return {
     ...result,
     items,
-    offset,
+    offset: pageOffset,
     reset: () => setOffset(0),
     pager: (
       <Pager
-        offset={offset}
+        offset={pageOffset}
         hasMore={items.length === PAGE}
         onChange={(next) => {
           setOffset(next);

@@ -25,14 +25,16 @@ import { ProviderInput } from '../catalog/schemas.js';
 import { decrypt } from '../crypto.js';
 import { notifyAdmins } from './notifications.js';
 import {
-  ceremonyCard,
+  ceremonyRichCard,
+  ceremonyKeyboard,
   escape,
   expandId,
   lifecycleLabels,
   listKeyboard,
   markup,
   miniAppButton,
-  providerCard,
+  providerRichCard,
+  richButtons,
   providerKeyboard,
   providerTitle,
   healthLabels,
@@ -115,22 +117,29 @@ export function createBot(db: DB, config: Config, botInfo?: UserFromGetMe) {
   const deepLink = (ctx: Context, payload: string) => startLink(ctx.me.username, payload);
 
   /** Replies to a message; ephemeral commands get an ephemeral answer visible only to the sender. */
-  async function reply(ctx: Context, text: string, reply_markup?: InlineKeyboardMarkup) {
+  async function reply(
+    ctx: Context,
+    text: string,
+    reply_markup?: InlineKeyboardMarkup,
+    rich?: string,
+  ) {
     const msg = ctx.msg;
+    const send = (extra: Parameters<Context['replyWithRichMessage']>[1]) =>
+      rich
+        ? ctx.replyWithRichMessage({ html: rich, skip_entity_detection: true }, extra)
+        : ctx.reply(text, { ...HTML, ...extra });
     if (msg?.ephemeral_message_id && ctx.from) {
-      await ctx
-        .reply(text, {
-          ...HTML,
-          ...hasMarkup(reply_markup),
-          ephemeral_message_parameters: { receiver_user_id: ctx.from.id },
-          reply_parameters: { ephemeral_message_id: msg.ephemeral_message_id },
-        })
-        .catch(ignore400);
+      await send({
+        ...hasMarkup(reply_markup),
+        ...(msg.is_topic_message ? { message_thread_id: msg.message_thread_id } : {}),
+        ephemeral_message_parameters: { receiver_user_id: ctx.from.id },
+        reply_parameters: { ephemeral_message_id: msg.ephemeral_message_id },
+      }).catch(ignore400);
       return;
     }
-    await ctx.reply(text, {
-      ...HTML,
+    await send({
       ...hasMarkup(reply_markup),
+      ...(msg?.is_topic_message ? { message_thread_id: msg.message_thread_id } : {}),
       ...(isGroupChat(ctx.chat?.type) && msg
         ? { reply_parameters: { message_id: msg.message_id, allow_sending_without_reply: true } }
         : {}),
@@ -147,14 +156,15 @@ export function createBot(db: DB, config: Config, botInfo?: UserFromGetMe) {
     const query = ctx.callbackQuery!,
       message = query.message;
     const extra = { ...HTML, ...hasMarkup(view.markup) };
+    const content = view.rich ? { html: view.rich, skip_entity_detection: true } : view.text;
     if (message && message.chat.type === 'private') {
       await answer(ctx, notice);
       try {
-        await ctx.editMessageText(view.text, extra);
+        await ctx.editMessageText(content, { ...extra, reply_markup: view.markup ?? markup([]) });
       } catch (error) {
         if (error instanceof GrammyError && error.description.includes('not modified')) return;
         if (!(error instanceof GrammyError && error.error_code === 400)) throw error;
-        await ctx.reply(view.text, extra);
+        await reply(ctx, view.text, view.markup, view.rich);
       }
       return;
     }
@@ -166,20 +176,27 @@ export function createBot(db: DB, config: Config, botInfo?: UserFromGetMe) {
             message.chat.id,
             query.from.id,
             ephemeralId,
-            view.text,
+            content,
             extra,
           );
         else
-          await ctx.api.sendMessage(message.chat.id, view.text, {
-            ...extra,
-            ...('is_topic_message' in message && message.is_topic_message
-              ? { message_thread_id: message.message_thread_id }
-              : {}),
-            ephemeral_message_parameters: {
-              receiver_user_id: query.from.id,
-              callback_query_id: query.id,
+          await ctx.api.sendRichMessage(
+            message.chat.id,
+            {
+              html: view.rich ?? view.text.replace(/\n/g, '<br>'),
+              skip_entity_detection: true,
             },
-          });
+            {
+              ...hasMarkup(view.markup),
+              ...('is_topic_message' in message && message.is_topic_message
+                ? { message_thread_id: message.message_thread_id }
+                : {}),
+              ephemeral_message_parameters: {
+                receiver_user_id: query.from.id,
+                callback_query_id: query.id,
+              },
+            },
+          );
         await answer(ctx, notice);
         return;
       } catch (error) {
@@ -210,9 +227,26 @@ export function createBot(db: DB, config: Config, botInfo?: UserFromGetMe) {
       else if (ctx.msg && ctx.chat) await reply(ctx, escape(text));
     }
   });
-  // Sender gate: ignore bots, disabled accounts and users over 30 updates per minute.
+  bot.on('message:migrate_to_chat_id', async (ctx) => {
+    const previous = String(ctx.chat.id),
+      next = String(ctx.message.migrate_to_chat_id);
+    await db.transaction(async (tx) => {
+      await tx.query(
+        "INSERT INTO telegram_chats(id,title,kind,topic_id,enabled) SELECT $1,title,kind,NULL,enabled FROM telegram_chats WHERE id=$2 AND kind='group' ON CONFLICT(id) DO NOTHING",
+        [next, previous],
+      );
+      await tx.query("DELETE FROM telegram_chats WHERE id=$1 AND kind='group'", [previous]);
+      await tx.query("UPDATE notifications SET chat_id=$1 WHERE chat_id=$2 AND status='pending'", [
+        next,
+        previous,
+      ]);
+      await audit(tx, null, 'telegram.migrate', previous, { chatId: next });
+    });
+  });
+  // Membership changes must be processed even when the person removing the bot is disabled.
   bot.use(async (ctx, next) => {
-    if (ctx.from?.is_bot) return;
+    if (ctx.myChatMember) return next();
+    if (ctx.from?.is_bot || ctx.msg?.sender_chat) return;
     if (ctx.from) {
       const [disabled] = await db.query('SELECT id FROM users WHERE telegram_id=$1 AND disabled', [
         String(ctx.from.id),
@@ -250,7 +284,7 @@ export function createBot(db: DB, config: Config, botInfo?: UserFromGetMe) {
 type Views = ReturnType<typeof views>;
 interface Tools {
   me(ctx: Context): ReturnType<typeof telegramUser>;
-  reply(ctx: Context, text: string, markup?: InlineKeyboardMarkup): Promise<void>;
+  reply(ctx: Context, text: string, markup?: InlineKeyboardMarkup, rich?: string): Promise<void>;
   show(ctx: Context, view: View, notice?: string): Promise<void>;
   answer(ctx: Context, text?: string, alert?: boolean): Promise<unknown>;
   deepLink(ctx: Context, payload: string): string | undefined;
@@ -262,6 +296,10 @@ interface Tools {
 
 /** Chat lifecycle and binding. Runs before the group whitelist so unbound groups can be set up. */
 function registerSetupHandlers(bot: Bot, db: DB, t: Tools) {
+  async function groupAdmin(ctx: Context, chatId: number | string) {
+    const members = await ctx.api.getChatAdministrators(chatId);
+    return members.some((member) => member.user.id === ctx.from!.id);
+  }
   bot.on('my_chat_member', async (ctx) => {
     const { chat, new_chat_member, old_chat_member, from } = ctx.myChatMember;
     if (!isGroupChat(chat.type)) return;
@@ -294,6 +332,8 @@ function registerSetupHandlers(bot: Bot, db: DB, t: Tools) {
     if (!admin) return void (await t.answer(ctx, '只有管理员可以绑定群', true));
     const chat = await ctx.api.getChat(ctx.match[1]!);
     if (!isGroupChat(chat.type)) return void (await t.answer(ctx, '这不是群组', true));
+    if (!(await groupAdmin(ctx, chat.id)))
+      return void (await t.answer(ctx, '还需要该群的管理员权限', true));
     await bindGroup(db, admin.id, String(chat.id), chat.title ?? String(chat.id), null);
     await ctx
       .editMessageReplyMarkup({
@@ -307,6 +347,8 @@ function registerSetupHandlers(bot: Bot, db: DB, t: Tools) {
       return void (await t.reply(ctx, '请在要绑定的群里发送此命令。'));
     const admin = await t.staff(ctx, ['admin']);
     if (!admin) return void (await t.reply(ctx, '只有 Deadstick 管理员可以设置通报群。'));
+    if (!(await groupAdmin(ctx, ctx.chat.id)))
+      return void (await t.reply(ctx, '还需要本群的管理员权限。'));
     const id = String(ctx.chat.id);
     if (ctx.message!.text.split(/[\s@]/)[0] === '/unbind') {
       await db.query("DELETE FROM telegram_chats WHERE id=$1 AND kind='group'", [id]);
@@ -347,8 +389,10 @@ function article(p: ProviderView, config: Config, username: string): InlineQuery
     title: providerTitle(p),
     description: `${lifecycleLabels[p.lifecycle] ?? p.lifecycle} · ${healthLabels[p.health] ?? p.health}`,
     input_message_content: {
-      message_text: dead ? ceremonyCard(p) : providerCard(p),
-      ...HTML,
+      rich_message: {
+        html: dead ? ceremonyRichCard(p) : providerRichCard(p),
+        skip_entity_detection: true,
+      },
     },
     ...hasMarkup(keyboard),
   };
@@ -432,7 +476,7 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
           ...miniAppButton(config, '📮 投稿', 'submit', privateChat),
           ...miniAppButton(config, '🔔 我的关注', 'following', privateChat),
         ],
-        reviewer
+        reviewer && privateChat
           ? [
               { text: '🗂 待处理', callback_data: 'pd' },
               ...miniAppButton(config, '管理台', 'admin', privateChat),
@@ -449,11 +493,11 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
     const p = id ? await v.byId(id) : undefined;
     if (p && kind === 'p') {
       const view = await card(ctx, p);
-      return t.reply(ctx, view.text, view.markup);
+      return t.reply(ctx, view.text, view.markup, view.rich);
     }
     if (p && kind === 'c' && p.lifecycle === 'dead') {
       const view = v.ceremony(p);
-      return t.reply(ctx, view.text, view.markup);
+      return t.reply(ctx, view.text, view.markup, view.rich);
     }
     if (p && kind === 'r') {
       const report = await v.report(p);
@@ -461,17 +505,22 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
     }
     if (kind === 'graveyard') {
       const view = await v.graveyard(0);
-      return t.reply(ctx, view.text, view.markup);
+      return t.reply(ctx, view.text, view.markup, view.rich);
     }
     if (kind === 'submit')
       return t.reply(
         ctx,
         submitHelp,
-        markup([miniAppButton(config, '📮 打开投稿表单', 'submit', true)]),
+        markup([miniAppButton(config, '📮 打开投稿表单', 'submit', ctx.chat.type === 'private')]),
       );
-    if (kind === 'pending' && (await t.staff(ctx))) {
-      const view = await v.pending();
-      return t.reply(ctx, view.text, view.markup);
+    if (
+      (kind === 'pending' || kind === 'admin') &&
+      ctx.chat.type === 'private' &&
+      (await t.staff(ctx))
+    ) {
+      const view =
+        kind === 'pending' ? await v.pending() : await v.dashboard((await t.staff(ctx))!.role);
+      return t.reply(ctx, view.text, view.markup, view.rich);
     }
     await welcome(ctx);
   });
@@ -507,7 +556,7 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
     const items = await v.search(query, 8);
     if (items.length === 1) {
       const view = await card(ctx, items[0]!);
-      return t.reply(ctx, view.text, view.markup);
+      return t.reply(ctx, view.text, view.markup, view.rich);
     }
     await t.reply(
       ctx,
@@ -540,18 +589,18 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
         ? results(ctx, ctx.match.trim().slice(0, 120))
         : t.reply(ctx, '用法：<code>/status slug</code>');
     const view = await card(ctx, p);
-    await t.reply(ctx, view.text, view.markup);
+    await t.reply(ctx, view.text, view.markup, view.rich);
   });
   bot.command('graveyard', async (ctx) => {
     const view = await v.graveyard(0);
-    await t.reply(ctx, view.text, view.markup);
+    await t.reply(ctx, view.text, view.markup, view.rich);
   });
   bot.command('ceremony', async (ctx) => {
     const p = await v.find(ctx.match);
     if (!p || p.lifecycle !== 'dead')
       return t.reply(ctx, '用法：<code>/ceremony 已确认跑路的slug</code>');
     const view = v.ceremony(p);
-    await t.reply(ctx, view.text, view.markup);
+    await t.reply(ctx, view.text, view.markup, view.rich);
   });
   const kindWords: Record<string, TributeKind> = {
     flower: 'flower',
@@ -686,51 +735,32 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
     const user = await t.me(ctx);
     await setFollow(db, user.id, p.id, follow);
     await t.answer(ctx, follow ? '已关注，状态变化会私信通知你' : '已取消关注');
-    // Follow state is personal, so only refresh the buttons in the user's own chat.
-    if (ctx.callbackQuery.message?.chat.type === 'private')
-      await ctx
-        .editMessageReplyMarkup({
-          reply_markup: (await v.provider(p, ctx.me.username, user.id)).markup,
-        })
+    const message = ctx.callbackQuery.message;
+    const content = {
+      html: (await v.provider(p, ctx.me.username, user.id)).rich!,
+      skip_entity_detection: true,
+    };
+    if (message && 'ephemeral_message_id' in message && message.ephemeral_message_id)
+      await ctx.api
+        .editEphemeralMessageText(
+          message.chat.id,
+          ctx.from.id,
+          message.ephemeral_message_id,
+          content,
+          { reply_markup: markup([]) },
+        )
         .catch(ignore400);
+    else if (message?.chat.type === 'private')
+      await ctx.editMessageText(content, { reply_markup: markup([]) }).catch(ignore400);
   });
-  async function sendReport(ctx: Context, report: { rich: string; text: string }) {
-    const query = ctx.callbackQuery;
-    const group = query?.message && isGroupChat(query.message.chat.type);
-    const ephemeral = group
-      ? {
-          ephemeral_message_parameters: {
-            receiver_user_id: query!.from.id,
-            callback_query_id: query!.id,
-          },
-        }
-      : {};
-    const chatId = ctx.chat?.id ?? query?.message?.chat.id;
-    if (chatId === undefined) return false;
-    try {
-      await ctx.api.sendRichMessage(
-        chatId,
-        { html: report.rich, skip_entity_detection: true },
-        ephemeral,
-      );
-    } catch (error) {
-      ignore400(error);
-      // Clients or chats without rich message support get the same data as regular HTML.
-      try {
-        await ctx.api.sendMessage(chatId, report.text, { ...HTML, ...ephemeral });
-      } catch (fallback) {
-        ignore400(fallback);
-        return false;
-      }
-    }
-    return true;
+  async function sendReport(ctx: Context, report: { rich: string; text: string; start: string }) {
+    if (ctx.callbackQuery) await t.show(ctx, report);
+    else await t.reply(ctx, report.text, undefined, report.rich);
   }
   bot.callbackQuery(new RegExp(`^rep:${id}$`), async (ctx) => {
     const p = await provider(ctx);
     const report = await v.report(p);
-    if (await sendReport(ctx, report)) return void (await t.answer(ctx));
-    const url = t.deepLink(ctx, report.start);
-    await ctx.answerCallbackQuery(url ? { url } : { text: '请私聊机器人查看' }).catch(ignore400);
+    await sendReport(ctx, report);
   });
   bot.callbackQuery(new RegExp(`^(${tributeKinds.join('|')}):${id}$`), async (ctx) => {
     const kind = ctx.match[1] as TributeKind;
@@ -744,6 +774,9 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
     const message = ctx.callbackQuery.message;
     const ceremony =
       ctx.callbackQuery.inline_message_id ||
+      (message &&
+        'rich_message' in message &&
+        JSON.stringify(message.rich_message).includes('电子追悼会')) ||
       (message && 'text' in message && message.text?.startsWith('🕯 电子追悼会'));
     if (result.created && ceremony) {
       const fresh = (await v.byId(p.id))!;
@@ -751,12 +784,26 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
         message && 'reply_markup' in message && message.reply_markup
           ? message.reply_markup
           : article(fresh, config, ctx.me.username).reply_markup;
-      await ctx
-        .editMessageText(ceremonyCard(fresh), {
-          ...HTML,
-          ...hasMarkup(keyboard as InlineKeyboardMarkup | undefined),
-        })
-        .catch(ignore400);
+      const inline = Boolean(ctx.callbackQuery.inline_message_id);
+      const rich =
+        ceremonyRichCard(fresh) + (inline ? '' : richButtons(ceremonyKeyboard(fresh, config)));
+      const extra = inline
+        ? hasMarkup(keyboard as InlineKeyboardMarkup | undefined)
+        : { reply_markup: markup([]) };
+      if (message && 'ephemeral_message_id' in message && message.ephemeral_message_id)
+        await ctx.api
+          .editEphemeralMessageText(
+            message.chat.id,
+            ctx.from.id,
+            message.ephemeral_message_id,
+            { html: rich, skip_entity_detection: true },
+            extra,
+          )
+          .catch(ignore400);
+      else
+        await ctx
+          .editMessageText({ html: rich, skip_entity_detection: true }, extra)
+          .catch(ignore400);
     }
   });
 
@@ -772,12 +819,6 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
         button: { text: '在机器人中查看墓园', start_parameter: 'graveyard' },
       },
     );
-  });
-  bot.on('message:migrate_to_chat_id', async (ctx) => {
-    await db.query('UPDATE telegram_chats SET id=$1 WHERE id=$2', [
-      String(ctx.message.migrate_to_chat_id),
-      String(ctx.chat.id),
-    ]);
   });
 }
 
@@ -829,24 +870,17 @@ function registerReviewHandlers(bot: Bot, db: DB, config: Config, v: Views, t: T
   bot.command('pending', async (ctx) => {
     if (!(await reviewer(ctx))) return;
     const view = await v.pending();
-    await t.reply(ctx, view.text, view.markup);
+    await t.reply(ctx, view.text, view.markup, view.rich);
   });
   bot.command('admin', async (ctx) => {
     const user = await reviewer(ctx);
     if (!user) return;
-    await t.reply(
-      ctx,
-      `🗂 <b>${user.role === 'admin' ? '管理员' : '审核员'}工作台</b>`,
-      markup([
-        [{ text: '待处理', callback_data: 'pd' }],
-        miniAppButton(config, '打开管理台', 'admin', true),
-        miniAppButton(config, '异常复核', 'incidents', true),
-        miniAppButton(config, '投稿审核', 'review_submissions', true),
-        ...(user.role === 'admin'
-          ? [miniAppButton(config, '机器人与通报群', 'telegram', true)]
-          : []),
-      ]),
-    );
+    const view = await v.dashboard(user.role);
+    await t.reply(ctx, view.text, view.markup, view.rich);
+  });
+  bot.callbackQuery('ad', async (ctx) => {
+    const user = await reviewer(ctx);
+    if (user) await t.show(ctx, await v.dashboard(user.role));
   });
   bot.callbackQuery('pd', async (ctx) => {
     if (await reviewer(ctx)) await t.show(ctx, await v.pending());
@@ -989,23 +1023,27 @@ function registerReviewHandlers(bot: Bot, db: DB, config: Config, v: Views, t: T
     await resolve(ctx, user, id!, action as 'dead', [evidence!], reason);
   });
 
-  bot.command('notify', async (ctx) => {
+  const notifications = async (ctx: Context) => {
     if (!(await reviewer(ctx))) return;
     const [row] = await db.query<{ enabled: boolean }>(
       "SELECT enabled FROM telegram_chats WHERE id=$1 AND kind='admin'",
       [String(ctx.from!.id)],
     );
-    await t.reply(
-      ctx,
-      `🔔 复核私信：${row?.enabled ? '已开启' : '未开启'}\n开启后会收到异常复核、投稿和留言的待办提醒。`,
-      markup([
+    const view: View = {
+      text: `🔔 复核私信：${row?.enabled ? '已开启' : '未开启'}\n开启后会收到异常复核、投稿和留言的待办提醒。`,
+      markup: markup([
         [
           { text: '开启', callback_data: 'nt:1', style: 'success' },
           { text: '关闭', callback_data: 'nt:0' },
         ],
       ]),
-    );
-  });
+      start: 'admin',
+    };
+    if (ctx.callbackQuery) await t.show(ctx, view);
+    else await t.reply(ctx, view.text, view.markup);
+  };
+  bot.command('notify', notifications);
+  bot.callbackQuery('nt', notifications);
   bot.callbackQuery(/^nt:([01])$/, async (ctx) => {
     const user = await reviewer(ctx);
     if (!user) return;

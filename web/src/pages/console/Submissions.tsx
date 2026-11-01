@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { Alert } from '@/components/arc/alert/alert';
 import { Button } from '@/components/arc/button/button';
@@ -73,11 +74,23 @@ function ReviewForm({ submission, onDone }: { submission: AdminSubmission; onDon
 }
 
 export default function Submissions() {
+  const [params, setParams] = useSearchParams();
+  const target = params.get('id');
   const [status, setStatus] = useState<Status>('pending');
-  const [active, setActive] = useState<AdminSubmission | null>(null);
+  const [selected, setActive] = useState<AdminSubmission | null>(null);
   const list = usePaged<AdminSubmission>(['admin', 'submissions'], '/admin/submissions', {
     status,
+    id: target ?? undefined,
   });
+  const active =
+    selected ??
+    (target && list.items[0]?.id === target && list.items[0].status === 'pending'
+      ? list.items[0]
+      : null);
+  const close = () => {
+    setActive(null);
+    setParams({}, { replace: true });
+  };
 
   return (
     <>
@@ -88,6 +101,7 @@ export default function Submissions() {
           options={statuses}
           onChange={(v) => {
             setStatus(v);
+            setParams({}, { replace: true });
             list.reset();
           }}
         />
@@ -133,11 +147,9 @@ export default function Submissions() {
         </ul>
       )}
       {list.pager}
-      <Dialog open={Boolean(active)} onOpenChange={(open) => !open && setActive(null)}>
+      <Dialog open={Boolean(active)} onOpenChange={(open) => !open && close()}>
         <DialogContent title={active ? `审核 ${active.provider.name}` : '审核'}>
-          {active && (
-            <ReviewForm key={active.id} submission={active} onDone={() => setActive(null)} />
-          )}
+          {active && <ReviewForm key={active.id} submission={active} onDone={close} />}
         </DialogContent>
       </Dialog>
     </>

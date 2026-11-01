@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router';
 import { Send } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import { Alert } from '@/components/arc/alert/alert';
 import { Button } from '@/components/arc/button/button';
 import { Input } from '@/components/arc/input/input';
@@ -14,22 +15,40 @@ import type { Session } from '@/lib/types';
 import styles from './Auth.module.css';
 
 function safeNext(value: string | null) {
-  return value && value.startsWith('/') && !value.startsWith('//') ? value : '/me';
+  return value && /^\/(?!\/)[^\\\s]*$/.test(value) ? value : '/me';
 }
 
 export function TelegramButton({ mode = 'login' }: { mode?: 'login' | 'link' }) {
   const [busy, setBusy] = useState(false);
   const { toast } = useToastStack();
   const [params] = useSearchParams();
+  const config = useQuery({
+    queryKey: ['telegram', 'login-config'],
+    queryFn: () =>
+      api<{ oidc_enabled: boolean; miniapp_enabled: boolean; miniapp_url: string | null }>(
+        '/auth/telegram/config',
+      ),
+  });
+  const openMiniApp =
+    mode === 'login' && !config.data?.oidc_enabled && config.data?.miniapp_enabled;
   return (
     <Button
       type="button"
       variant="secondary"
       className={styles.telegram}
       loading={busy}
+      disabled={!config.data?.oidc_enabled && !openMiniApp}
       onClick={async () => {
         setBusy(true);
         try {
+          if (openMiniApp && config.data?.miniapp_url) {
+            const link = new URL(config.data.miniapp_url);
+            if (safeNext(params.get('next')).startsWith('/console'))
+              link.searchParams.set('startapp', 'admin');
+            window.location.assign(link.toString());
+            setBusy(false);
+            return;
+          }
           const { url } =
             mode === 'link'
               ? await api<{ url: string }>('/auth/telegram/link', { method: 'POST' })
@@ -44,7 +63,7 @@ export function TelegramButton({ mode = 'login' }: { mode?: 'login' | 'link' }) 
       }}
     >
       <Send size={16} strokeWidth={1.75} />
-      {mode === 'link' ? '绑定 Telegram' : 'Telegram 登录'}
+      {mode === 'link' ? '绑定 Telegram' : openMiniApp ? '在 Telegram 中打开' : 'Telegram 登录'}
     </Button>
   );
 }

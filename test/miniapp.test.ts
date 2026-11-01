@@ -24,6 +24,10 @@ describe('Telegram Mini App navigation', () => {
       `/airports?q=${encodeURIComponent('测试 /console')}`,
     );
     expect(miniAppPath(`p_${id.replace(/-/g, '')}`)).toBe(`/airports/${id}`);
+    expect(miniAppPath(`i_${id.replace(/-/g, '')}`)).toBe(`/console/incidents?id=${id}`);
+    expect(miniAppPath(`s_${id.replace(/-/g, '')}`)).toBe(`/console/submissions?id=${id}`);
+    expect(miniAppPath(`m_${id.replace(/-/g, '')}`)).toBe(`/console/memorials?id=${id}`);
+    expect(miniAppPath('users')).toBe('/console/users');
     for (const payload of [
       'https://evil.example',
       '//evil.example',

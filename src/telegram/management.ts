@@ -25,6 +25,13 @@ const statusView = (me: BotInfo, webhook: WebhookInfo) => ({
   webhook_url: webhook.url,
   pending_updates: webhook.pending_update_count,
   last_error: webhook.last_error_message ?? null,
+  capabilities: {
+    inline: Boolean(me.supports_inline_queries),
+    guest: Boolean(me.supports_guest_queries),
+    miniapp: Boolean(me.has_main_web_app),
+    groups: Boolean(me.can_join_groups),
+    privacy: !me.can_read_all_group_messages,
+  },
   hints: [
     !me.supports_inline_queries && '在 BotFather 开启 Inline mode（/setinline）',
     !me.supports_guest_queries && '在 BotFather 开启 Guest Mode',

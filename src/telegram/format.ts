@@ -3,7 +3,7 @@ import type { Config } from '../config.js';
 
 // Every value from users or the catalog must pass through escape() before it enters HTML.
 export const escape = (value: string) =>
-  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 export const clip = (value: string, max: number) =>
   value.length > max ? `${value.slice(0, max - 1)}…` : value;
 
@@ -110,6 +110,56 @@ type Row = InlineKeyboardButton[];
 export const markup = (rows: Row[]): InlineKeyboardMarkup => ({
   inline_keyboard: rows.filter((row) => row.length),
 });
+
+export function richButtons(keyboard: InlineKeyboardMarkup) {
+  return keyboard.inline_keyboard
+    .map(
+      (row) =>
+        `<tg-button-row>${row
+          .map((button) => {
+            const style = button.style ? ` style="${button.style}"` : '';
+            let action: string;
+            if ('callback_data' in button)
+              action = `type="callback_data" data="${escape(button.callback_data)}"`;
+            else if ('url' in button) action = `type="url" url="${escape(button.url)}"`;
+            else if ('web_app' in button)
+              action = `type="web_app" url="${escape(button.web_app.url)}"`;
+            else if ('switch_inline_query' in button)
+              action = `type="switch_inline_query" query="${escape(button.switch_inline_query)}"`;
+            else if ('switch_inline_query_current_chat' in button)
+              action = `type="switch_inline_query_current_chat" query="${escape(button.switch_inline_query_current_chat)}"`;
+            else if ('copy_text' in button)
+              action = `type="copy_text" text="${escape(button.copy_text.text)}"`;
+            else if ('disabled' in button) action = 'type="disabled"';
+            else throw new Error('Unsupported rich message button');
+            return `<tg-button ${action}${style}>${escape(button.text)}</tg-button>`;
+          })
+          .join('')}</tg-button-row>`,
+    )
+    .join('');
+}
+
+export function providerRichCard(p: ProviderView) {
+  return [
+    `<h2>${escape(providerTitle(p))}</h2>`,
+    `<p><code>${escape(p.slug)}</code></p>`,
+    `<table bordered compact><tr><th>状态</th><th>检测</th></tr><tr><td>${escape(lifecycleLabels[p.lifecycle] ?? p.lifecycle)}</td><td>${escape(healthLabels[p.health] ?? p.health)}</td></tr></table>`,
+    p.lifecycle === 'suspected'
+      ? '<blockquote>连续检测异常，等待人工核验，尚未确认跑路。</blockquote>'
+      : '',
+    p.lifecycle === 'dead'
+      ? `<p>入土：${time(p.death_at, 'D')}</p><blockquote>${escape(clip(p.epitaph ?? '愿后来者少走弯路。', 500))}</blockquote><p>${tributeLine(p)}</p>`
+      : '',
+    p.description
+      ? `<details><summary>机场介绍</summary><p>${escape(clip(p.description, 600))}</p></details>`
+      : '',
+    `<footer>最近检测：${time(p.last_checked_at)}</footer>`,
+  ].join('');
+}
+
+export function ceremonyRichCard(p: ProviderView) {
+  return `<h2>🕯 电子追悼会</h2><h3>${escape(p.name)}</h3><p><code>${escape(p.slug)}</code> · 入土 ${time(p.death_at, 'D')}</p><aside>${escape(clip(p.epitaph ?? '愿后来者少走弯路。', 500))}</aside><table compact><tr><th>🌼 献花</th><th>🕯 点烛</th><th>🙏 上香</th></tr><tr><td>${p.flowers ?? 0}</td><td>${p.candles ?? 0}</td><td>${p.incense ?? 0}</td></tr></table>`;
+}
 const url = (text: string, href: string | undefined): Row => (href ? [{ text, url: href }] : []);
 export const tributeRow = (id: string): Row =>
   tributeKinds.map((kind) => ({ text: tributeLabels[kind], callback_data: `${kind}:${id}` }));

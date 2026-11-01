@@ -19,13 +19,15 @@ export async function verifyTelegramIdToken(
       requiredClaims: ['sub', 'iat', 'exp', 'nonce'],
     });
     if (
-      !equal(String(payload.nonce), nonce) ||
+      typeof payload.nonce !== 'string' ||
+      !equal(payload.nonce, nonce) ||
       !Number.isSafeInteger(payload.id) ||
       Number(payload.id) <= 0 ||
-      typeof payload.name !== 'string'
+      typeof payload.name !== 'string' ||
+      !payload.name.trim()
     )
       throw new Error('claims');
-    return { id: String(payload.id), subject: payload.sub!, name: payload.name };
+    return { id: String(payload.id), subject: payload.sub!, name: payload.name.trim() };
   } catch {
     throw new AppError(401, 'TELEGRAM_AUTH', 'Invalid Telegram ID token');
   }
@@ -44,8 +46,15 @@ export function verifyMiniApp(initData: string, botToken: string, now = Date.now
     .join('\n');
   const secret = createHmac('sha256', 'WebAppData').update(botToken).digest();
   const expected = createHmac('sha256', secret).update(check).digest('hex');
-  const age = now / 1000 - Number(params.get('auth_date'));
-  if (!equal(expected, supplied) || !Number.isFinite(age) || age < -30 || age > 300)
+  const authDate = params.get('auth_date') ?? '';
+  const age = now / 1000 - Number(authDate);
+  if (
+    !/^\d+$/.test(authDate) ||
+    !equal(expected, supplied) ||
+    !Number.isFinite(age) ||
+    age < -30 ||
+    age > 300
+  )
     throw new AppError(401, 'TELEGRAM_AUTH', 'Invalid or expired Mini App data');
   let user: { id?: number; first_name?: string };
   try {

@@ -56,7 +56,7 @@ API 与 worker 两个进程都要运行：API 接收 webhook 并把更新加密�
 node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 ```
 
-`PUBLIC_URL` 不是 `https://` 时，消息里不会出现网站按钮（Telegram 拒绝本地地址的按钮），`telegram:setup` 也会拒绝运行。本地联调可以用 HTTPS 隧道作为 `PUBLIC_URL`。
+`PUBLIC_URL` 不是 `https://` 时，消息里不会出现网站按钮（Telegram 拒绝本地地址的按钮），`telegram:setup` 也会拒绝运行。本地联调可以用 HTTPS 隧道作为 `PUBLIC_URL`。连接检查会分别显示 Main Mini App、Inline、Guest、群组与隐私模式的状态，未开启的能力需要在 BotFather 设置。
 
 ## 3. 初始化
 
@@ -107,11 +107,11 @@ docker compose run --rm api node dist/telegram/setup.js
 
 只有已启用的绑定群会收到通报、响应群命令。三种绑定方式：
 
-- **入群提醒**：把机器人加入群后，管理员会收到私信，点 **绑定为通报群** 即完成。
-- **群内命令**：管理员（网站角色 admin，且已绑定 Telegram）在群里发送 `/bind`。在论坛群的某个话题里发送时，通报会发到该话题；`/unbind` 取消。
+- **入群提醒**：把机器人加入群后，管理员会收到私信，点 **绑定为通报群**。操作人须同时具有 Deadstick 管理员与该群管理员权限。
+- **群内命令**：管理员（网站角色 admin，已绑定 Telegram，并且是该群管理员）在群里发送 `/bind`。在论坛群的某个话题里发送时，通报会发到该话题；`/unbind` 取消。
 - **后台接口**：`PUT /admin/telegram/chats/{负数群ID}`，`{"kind":"group","enabled":true,"topicId":12}`。
 
-机器人被移出或封禁时，绑定会自动停用并提醒管理员，重新入群后再 `/bind` 一次。普通群升级为超级群时，绑定会跟随新群 ID。
+机器人被移出或封禁时，绑定会自动停用并提醒管理员，重新入群后再 `/bind` 一次。普通群升级为超级群时，绑定与待发通知会跟随新群 ID。
 
 隐私模式下，机器人在群里收到的是带 `@机器人` 的命令、对机器人消息的回复和按钮回调。不需要给机器人管理员权限；如果给了管理员权限，Telegram 允许它随时向群成员发送仅本人可见的消息。
 
@@ -161,7 +161,11 @@ docker compose run --rm api node dist/telegram/setup.js
 
 Mini App 主应用链接使用 `https://t.me/<bot>?startapp=<目标>`。目标支持 `airports`、`graveyard`、`submit`、`following`、`submissions`、`me`、`admin`、`incidents`、`review_submissions`、`memorials`、`telegram`，以及 `p_<id>`（机场详情）。未知目标不会作为 URL 跳转；管理路由始终重新校验角色。私聊按钮使用 `web_app`，群消息、inline 卡片和通知使用 `startapp` 链接，避免跳到外部浏览器。
 
+管理员工作台还提供 `users`、`jobs`、`notifications`、`audit` 入口。审核通知使用 `i_<id>`、`s_<id>`、`m_<id>` 直接定位异常、投稿和留言；记录已处理时显示当前状态。Telegram 原生设置菜单按角色打开机器人配置或账号安全页。
+
 搜索结果使用 `search_<UTF-8 关键词的 base64url>` 目标，保留筛选关键词；内容仅作为站内搜索参数使用。
+
+网页 Telegram 登录使用官方 OIDC Authorization Code + PKCE，并验证签名、issuer、audience 和 nonce。授权取消后回到登录页并保留原目标；状态绑定当前浏览器且只能使用一次。未配置 OIDC、已配置 Mini App 时，登录页提供「在 Telegram 中打开」入口。
 
 ### Inline、Guest 与 Mini App
 
@@ -171,9 +175,9 @@ Mini App 主应用链接使用 `https://t.me/<bot>?startapp=<目标>`。目标�
 
 ### 消息格式
 
-所有消息使用 HTML `parse_mode`。机场名称、描述、墓志铭、留言、复核原因等内容一律经过转义。时间用 `<tg-time>` 显示为读者本地时间，旧客户端显示 UTC 文本。描述放在可折叠引用里。
+机场卡片、追悼会、检测记录、管理员工作台和业务通报使用 Bot API 10.3 原生 Rich Messages：标题、紧凑表格、折叠详情、引用、页脚与卡内按钮。Inline 和 Guest 查询也返回原生富卡片。普通提示与需要强制回复的审核输入保留 HTML 消息。机场名称、描述、墓志铭、留言、复核原因和按钮属性一律经过转义；订阅凭据不进入卡片。时间用 `<tg-time>` 显示为读者本地时间。
 
-检测记录优先用 Bot API 10.1 的 rich message 发送表格；Telegram 拒绝时自动改发普通 HTML 文本，内容相同。
+群命令、富卡片与仅本人可见的结果会保留所在话题。关注按钮只更新操作者的私聊或个人浮层；公开追悼会的祭奠计数通过原消息更新。
 
 ## 7. 复核与审核流程
 
@@ -182,7 +186,7 @@ Mini App 主应用链接使用 `https://t.me/<bot>?startapp=<目标>`。目标�
 1. 点按钮后，机器人发来一条需要回复的消息。
 2. 回复它：第一行写证据链接（http/https，最多 10 个，空格分隔），第二行起写核验原因（3–2000 字）。确认跑路时可另起一行写 `墓志铭：……`。
 3. 机器人按数据库里的当前角色校验权限后保存结论，并向通报群、审核员和关注者广播结果。
-4. 其他审核员收到的同一事件卡片上的按钮会被自动移除；仍在按旧按钮的人会看到“已经有人处理过了”。
+4. 其他审核员收到的同一事件卡片上的按钮会被自动移除，尚未发出的卡片也会去掉操作按钮；仍在按旧按钮的人会看到“已经有人处理过了”。
 
 投稿卡片的 **通过** 直接收录并私信投稿人；**驳回** 会要求回复驳回原因，再私信告知投稿人。留言卡片的 **公开** / **隐藏** 立即生效。网站后台的同类操作效果相同，并同样会撤掉机器人消息上的按钮。
 
@@ -223,4 +227,5 @@ Mini App 主应用链接使用 `https://t.me/<bot>?startapp=<目标>`。目标�
 - 订阅地址永远不会出现在机器人消息里，投稿只显示官网域名和订阅数量。投稿只在私聊处理。
 - 用户身份只取自 Telegram 签名的更新（`from.id`）、OIDC `id_token` 和 Mini App `initData`。
 - 复核、审核和绑定在每次操作时都按数据库里的当前角色判断；按钮数据视为用户输入，重新校验目标。
+- 通知投递时再次检查接收人的当前角色、停用状态与会话绑定；降权、关闭复核私信或解绑群后，已排队但尚未发出的对应通知会停止发送。上线前需应用 `004_notification_audience.sql` 迁移。
 - 原始更新以 `APP_KEY` 加密存储，仅管理员可读，保留 7 天。

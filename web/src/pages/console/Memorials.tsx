@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/arc/button/button';
@@ -20,10 +20,14 @@ const statuses: { value: Status; label: string }[] = [
 ];
 
 export default function Memorials() {
+  const [params, setParams] = useSearchParams();
   const client = useQueryClient();
   const { toast } = useToastStack();
   const [status, setStatus] = useState<Status>('pending');
-  const list = usePaged<AdminMemorial>(['admin', 'memorials'], '/admin/memorials', { status });
+  const list = usePaged<AdminMemorial>(['admin', 'memorials'], '/admin/memorials', {
+    status,
+    id: params.get('id') ?? undefined,
+  });
   const moderate = useMutation({
     mutationFn: ({ id, visible }: { id: string; visible: boolean }) =>
       api(`/admin/memorials/${id}`, { method: 'PATCH', body: { visible } }),
@@ -45,6 +49,7 @@ export default function Memorials() {
           options={statuses}
           onChange={(v) => {
             setStatus(v);
+            setParams({}, { replace: true });
             list.reset();
           }}
         />

@@ -20,6 +20,8 @@ import { createBot, processBotUpdates } from '../src/telegram/bot.js';
 import { dispatchNotifications, enqueue, TelegramError } from '../src/telegram/notifications.js';
 import type { CheckEndpoint } from '../src/monitor/check.js';
 import { telegramConfig } from '../src/telegram/settings.js';
+import { exportJWK, generateKeyPair, SignJWT } from 'jose';
+import { pkceChallenge } from '../src/auth/telegram.js';
 
 const connection = process.env.TEST_DATABASE_URL;
 describe.skipIf(!connection)('PostgreSQL integration', () => {
@@ -495,7 +497,10 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       await restarted.close();
     }
     const publicConfig = await app.inject({ url: '/auth/telegram/config' });
-    expect(publicConfig.json()).toEqual({ bot_username: 'configured_bot', oidc_enabled: true });
+    expect(publicConfig.json()).toMatchObject({
+      bot_username: 'configured_bot',
+      oidc_enabled: true,
+    });
     const view = await app.inject({ url: '/admin/telegram/settings', headers: admin });
     const stored = await storage.db.query("SELECT value FROM settings WHERE key='telegram'");
     const auditRows = await storage.db.query(
@@ -841,6 +846,94 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       await oidc.close();
     }
   });
+  it('completes OIDC with PKCE, unifies the Bot identity and consumes each browser challenge once', async () => {
+    const oidc = await buildApp(
+      storage.db,
+      { ...config, telegramClientId: '123', telegramClientSecret: 'test-secret' },
+      { logger: false, sender },
+    );
+    const { privateKey, publicKey } = await generateKeyPair('RS256');
+    const jwk = { ...(await exportJWK(publicKey)), kid: 'integration-oidc' };
+    try {
+      const start = await oidc.inject({ url: '/auth/telegram/start?next=%2Fconsole%2Fincidents' });
+      const url = new URL(start.json().url);
+      const state = url.searchParams.get('state')!;
+      const cookie = `tg_state=${start.cookies.find((c) => c.name === 'tg_state')!.value}`;
+      const token = await new SignJWT({
+        id: 100,
+        name: 'Telegram Admin',
+        nonce: url.searchParams.get('nonce'),
+      })
+        .setProtectedHeader({ alg: 'RS256', kid: jwk.kid })
+        .setIssuer('https://oauth.telegram.org')
+        .setAudience('123')
+        .setSubject('admin-oidc-subject')
+        .setIssuedAt()
+        .setExpirationTime('5m')
+        .sign(privateKey);
+      const fetcher = vi.fn(async (resource: string | URL | Request, options?: RequestInit) => {
+        if (String(resource).includes('jwks.json')) return Response.json({ keys: [jwk] });
+        expect(String(resource)).toBe('https://oauth.telegram.org/token');
+        const body = options!.body as URLSearchParams;
+        expect(body.get('code')).toBe('approved-code');
+        expect(body.get('redirect_uri')).toBe(`${config.publicUrl}/auth/telegram/callback`);
+        expect(pkceChallenge(body.get('code_verifier')!)).toBe(
+          url.searchParams.get('code_challenge'),
+        );
+        return Response.json({ id_token: token });
+      });
+      vi.stubGlobal('fetch', fetcher);
+      const callback = `/auth/telegram/callback?state=${state}&code=approved-code`;
+      const response = await oidc.inject({
+        url: callback,
+        headers: { cookie, accept: 'text/html' },
+      });
+      expect(response.statusCode, response.body).toBe(302);
+      expect(response.headers.location).toBe('/console/incidents');
+      const session = response.cookies.find((c) => c.name === 'session')!;
+      const me = await oidc.inject({
+        url: '/auth/me',
+        headers: { cookie: `session=${session.value}` },
+      });
+      expect(me.json().user).toMatchObject({ id: adminId, role: 'admin', telegram_id: '100' });
+      expect(
+        await storage.db.query('SELECT id FROM users WHERE telegram_id=$1', ['100']),
+      ).toHaveLength(1);
+      expect((await oidc.inject({ url: callback, headers: { cookie } })).json().error.code).toBe(
+        'INVALID_STATE',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      await oidc.close();
+    }
+  });
+  it('handles denied OIDC authorization, preserves the destination and binds callbacks to the browser', async () => {
+    const oidc = await buildApp(
+      storage.db,
+      { ...config, telegramClientId: '123', telegramClientSecret: 'test-secret' },
+      { logger: false, sender },
+    );
+    try {
+      const response = await oidc.inject({
+        url: '/auth/telegram/start?next=%2Fconsole%2Fsubmissions',
+      });
+      const state = new URL(response.json().url).searchParams.get('state')!;
+      const cookie = `tg_state=${response.cookies.find((c) => c.name === 'tg_state')!.value}`;
+      const url = `/auth/telegram/callback?state=${state}&error=access_denied&error_description=cancelled`;
+      expect((await oidc.inject({ url })).json().error.code).toBe('INVALID_STATE');
+      const denied = await oidc.inject({ url, headers: { cookie, accept: 'text/html' } });
+      expect(denied.statusCode).toBe(302);
+      expect(denied.headers.location).toBe(
+        '/login?telegram=TELEGRAM_CANCELLED&next=%2Fconsole%2Fsubmissions',
+      );
+      expect(denied.cookies.some((c) => c.name === 'tg_state' && c.maxAge === 0)).toBe(true);
+      expect((await oidc.inject({ url, headers: { cookie } })).json().error.code).toBe(
+        'INVALID_STATE',
+      );
+    } finally {
+      await oidc.close();
+    }
+  });
   it('manages review notifications from Mini App with current reviewer permissions', async () => {
     expect(
       (
@@ -1044,9 +1137,11 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       const result =
         method === 'getChat'
           ? { id: -100777, type: 'supergroup', title: 'Airport watch' }
-          : method.startsWith('send')
-            ? { message_id: 55, date: 1, chat: { id: 1, type: 'private' } }
-            : true;
+          : method === 'getChatAdministrators'
+            ? [{ status: 'administrator', user: { id: 100, is_bot: false, first_name: 'Admin' } }]
+            : method.startsWith('send')
+              ? { message_id: 55, date: 1, chat: { id: 1, type: 'private' } }
+              : true;
       return { ok: true, result } as never;
     });
     return { bot, calls };
@@ -1122,14 +1217,16 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
         entities: [{ type: 'bot_command', offset: 0, length: 7 }],
       },
     } as never);
-    const sent = calls.find((c) => c.method === 'sendMessage')!;
+    const sent = calls.find((c) => c.method === 'sendRichMessage')!;
     expect(sent.payload).toMatchObject({
-      parse_mode: 'HTML',
       ephemeral_message_parameters: { receiver_user_id: 42 },
       reply_parameters: { ephemeral_message_id: 9 },
     });
-    expect(sent.payload.text).toContain('&lt;b&gt;Evil&lt;/b&gt; &amp; co');
-    expect(sent.payload.text).not.toContain('<b>Evil');
+    const rich = sent.payload.rich_message as { html: string };
+    expect(rich.html).toContain('&lt;b&gt;Evil&lt;/b&gt; &amp; co');
+    expect(rich.html).not.toContain('<b>Evil');
+    expect(rich.html).toContain('<table bordered compact>');
+    expect(rich.html).toContain('<tg-button-row>');
   });
   it('reviews incidents from buttons only after evidence is replied, and clears stale buttons', async () => {
     const p = await provider();
@@ -1250,6 +1347,209 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
     });
     expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(2);
   });
+  it('keeps rich group navigation in the same topic and updates personal overlays without editing public cards', async () => {
+    const p = await provider();
+    await storage.db.query(
+      "INSERT INTO telegram_chats(id,title,kind,topic_id) VALUES ('-100123','Forum','group',12)",
+    );
+    const { bot, calls } = testBot();
+    const message = {
+      message_id: 7,
+      date: 1,
+      chat: { id: -100123, type: 'supergroup', title: 'Forum' },
+      is_topic_message: true,
+      message_thread_id: 12,
+    };
+    const callback = press(1, tester, `p:${p.id}`);
+    await bot.handleUpdate({
+      ...callback,
+      callback_query: { ...callback.callback_query, message },
+    } as never);
+    const sent = calls.find((c) => c.method === 'sendRichMessage')!;
+    expect(sent.payload).toMatchObject({
+      message_thread_id: 12,
+      ephemeral_message_parameters: { receiver_user_id: 42, callback_query_id: 'cb1' },
+    });
+    expect(calls.some((c) => c.method === 'editMessageText')).toBe(false);
+    calls.length = 0;
+    const follow = press(2, tester, `fo:${p.id}`);
+    await bot.handleUpdate({
+      ...follow,
+      callback_query: {
+        ...follow.callback_query,
+        message: { ...message, message_id: 0, ephemeral_message_id: 9 },
+      },
+    } as never);
+    const edit = calls.find((c) => c.method === 'editEphemeralMessageText')!;
+    expect(edit.payload).toMatchObject({
+      chat_id: -100123,
+      receiver_user_id: 42,
+      ephemeral_message_id: 9,
+    });
+    expect((edit.payload.rich_message as { html: string }).html).toContain(`uf:${p.id}`);
+    expect(calls.some((c) => c.method === 'editMessageText')).toBe(false);
+  });
+  it('keeps reviewer dashboards private and rejects old admin controls after demotion', async () => {
+    await storage.db.query("UPDATE users SET telegram_id='42',role='moderator' WHERE id=$1", [
+      userId,
+    ]);
+    const { bot, calls } = testBot({
+      ...config,
+      publicUrl: 'https://deadstick.example',
+      botUsername: 'deadstick_test_bot',
+    });
+    await bot.handleUpdate(text(1, tester, '/admin') as never);
+    const dashboard = calls.find((c) => c.method === 'sendRichMessage')!;
+    const html = (dashboard.payload.rich_message as { html: string }).html;
+    expect(html).toContain('审核员工作台');
+    expect(html).toContain('tgWebAppStartParam=memorials');
+    expect(html).not.toContain('tgWebAppStartParam=telegram');
+    expect(html).not.toContain('tgWebAppStartParam=users');
+    await storage.db.query("UPDATE users SET role='user' WHERE id=$1", [userId]);
+    calls.length = 0;
+    await bot.handleUpdate(press(2, tester, 'ad'));
+    expect(
+      calls.some((c) => c.method === 'editMessageText' || c.method === 'sendRichMessage'),
+    ).toBe(false);
+    expect(calls.find((c) => c.method === 'answerCallbackQuery')!.payload).toMatchObject({
+      show_alert: true,
+    });
+  });
+  it('requires both application and group administrator rights to bind from commands or old invitation buttons', async () => {
+    const { bot, calls } = testBot();
+    bot.api.config.use(async (prev, method, payload, signal) =>
+      method === 'getChatAdministrators'
+        ? ({ ok: true, result: [] } as never)
+        : prev(method, payload, signal),
+    );
+    await bot.handleUpdate(
+      text(1, reviewerUser, '/bind', {
+        chat: { id: -100777, type: 'supergroup', title: 'Group' },
+      }) as never,
+    );
+    await bot.handleUpdate(press(2, reviewerUser, 'bind:-100777'));
+    expect(await storage.db.query("SELECT id FROM telegram_chats WHERE kind='group'")).toHaveLength(
+      0,
+    );
+    expect(calls.some((c) => c.method === 'editMessageReplyMarkup')).toBe(false);
+  });
+  it('migrates group bindings and queued notices even when a service message comes from a bot', async () => {
+    await storage.db.query(
+      "INSERT INTO telegram_chats(id,title,kind) VALUES ('-777','Group','group')",
+    );
+    await enqueue(storage.db, 'before-migration', '-777', { text: 'Queued' }, null, {
+      audience: 'group',
+    });
+    const { bot } = testBot();
+    await bot.handleUpdate({
+      update_id: 1,
+      message: {
+        message_id: 9,
+        date: 1,
+        chat: { id: -777, type: 'group', title: 'Group' },
+        from: { id: 123, is_bot: true, first_name: 'Bot' },
+        migrate_to_chat_id: -100777,
+      },
+    } as never);
+    expect(await storage.db.query('SELECT id FROM telegram_chats')).toEqual([{ id: '-100777' }]);
+    await dispatchNotifications(storage.db, sender);
+    expect(sender.send).toHaveBeenCalledWith(
+      'sendMessage',
+      expect.objectContaining({ chat_id: '-100777' }),
+    );
+  });
+  it('does not deliver queued review data after demotion or group unbinding', async () => {
+    await storage.db.query(
+      "INSERT INTO telegram_chats(id,title,kind) VALUES ('100','Admin','admin'),('-100123','Group','group')",
+    );
+    await enqueue(
+      storage.db,
+      'review',
+      '100',
+      { rich_message: { html: '<h2>Review</h2>' } },
+      null,
+      { method: 'sendRichMessage', audience: 'reviewer' },
+    );
+    await enqueue(
+      storage.db,
+      'group',
+      '-100123',
+      { rich_message: { html: '<h2>Notice</h2>' } },
+      12,
+      { method: 'sendRichMessage', audience: 'group' },
+    );
+    await storage.db.query("UPDATE users SET role='user' WHERE id=$1", [adminId]);
+    await storage.db.query("DELETE FROM telegram_chats WHERE kind='group'");
+    await dispatchNotifications(storage.db, sender);
+    expect(sender.send).not.toHaveBeenCalled();
+    const rows = await storage.db.query('SELECT status,error_code FROM notifications');
+    expect(rows).toHaveLength(2);
+    for (const row of rows)
+      expect(row).toEqual({ status: 'failed', error_code: 'RECIPIENT_REVOKED' });
+  });
+  it('delivers rich incident notices to forum topics and removes resolved review actions before delivery', async () => {
+    const p = await provider();
+    await storage.db.query(
+      "INSERT INTO telegram_chats(id,title,kind,topic_id) VALUES ('100','Admin','admin',NULL),('-100123','Group','group',12)",
+    );
+    await check(p.id, false);
+    await check(p.id, false);
+    const [incident] = await storage.db.query<{ id: string }>('SELECT id FROM incidents');
+    await resolveIncident(
+      storage.db,
+      config,
+      incident!.id,
+      {
+        action: 'dismissed',
+        reason: '人工复核排除误报',
+        evidenceUrls: ['https://evidence.example/ok'],
+      },
+      adminId,
+    );
+    sender.send.mockResolvedValue({ message_id: 55 });
+    await dispatchNotifications(storage.db, sender);
+    expect(sender.send.mock.calls.filter(([method]) => method === 'sendRichMessage')).toHaveLength(
+      4,
+    );
+    const forum = sender.send.mock.calls.filter(([, payload]) => payload.chat_id === '-100123');
+    for (const [, payload] of forum) expect(payload.message_thread_id).toBe(12);
+    const reviewerOld = sender.send.mock.calls.find(
+      ([, payload]) =>
+        payload.chat_id === '100' &&
+        (payload.rich_message as { html: string }).html.includes('检测异常'),
+    )!;
+    expect(reviewerOld[1].reply_markup).toBeUndefined();
+  });
+  it('opens exact review records from Mini App links even after their status changes', async () => {
+    const p = await provider();
+    await check(p.id, false);
+    await check(p.id, false);
+    const [incident] = await storage.db.query<{ id: string }>('SELECT id FROM incidents');
+    await resolveIncident(
+      storage.db,
+      config,
+      incident!.id,
+      {
+        action: 'dismissed',
+        reason: '人工复核排除误报',
+        evidenceUrls: ['https://evidence.example/ok'],
+      },
+      adminId,
+    );
+    const response = await app.inject({
+      url: `/admin/incidents?id=${incident!.id}`,
+      headers: admin,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().items).toMatchObject([{ id: incident!.id, status: 'dismissed' }]);
+    expect(
+      (await app.inject({ url: `/admin/incidents?id=${incident!.id}`, headers: member }))
+        .statusCode,
+    ).toBe(403);
+    expect(
+      (await app.inject({ url: '/admin/incidents?id=invalid', headers: admin })).statusCode,
+    ).toBe(400);
+  });
   it('answers guest mentions with a read-only card', async () => {
     await provider();
     const { bot, calls } = testBot();
@@ -1293,10 +1593,10 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
     expect((await storage.db.query('SELECT status,provider_id FROM submissions'))[0]!.status).toBe(
       'approved',
     );
-    const [result] = await storage.db.query<{ payload: { text: string } }>(
+    const [result] = await storage.db.query<{ payload: { rich_message: { html: string } } }>(
       "SELECT payload FROM notifications WHERE chat_id='42'",
     );
-    expect(result!.payload.text).toContain('投稿已通过');
+    expect(result!.payload.rich_message.html).toContain('投稿已通过');
   });
   it('accepts bot submissions in private chats only', async () => {
     const { bot, calls } = testBot();

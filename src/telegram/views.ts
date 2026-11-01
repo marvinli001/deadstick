@@ -15,6 +15,9 @@ import {
   miniAppLink,
   compactId,
   providerCard,
+  providerRichCard,
+  ceremonyRichCard,
+  richButtons,
   providerKeyboard,
   providerViewSql,
   reviewKeyboard,
@@ -25,6 +28,7 @@ import {
 
 export interface View {
   text: string;
+  rich?: string;
   markup?: InlineKeyboardMarkup;
   /** Deep-link payload that reopens the same view in the private chat. */
   start: string;
@@ -62,19 +66,20 @@ export function views(db: DB, config: Config) {
     search,
     byId: (id: string) => one('WHERE p.id=$1', [id]),
     async provider(p: ProviderView, username: string, userId?: string): Promise<View> {
+      const keyboard = providerKeyboard(p, config, {
+        username,
+        following: await following(userId, p.id),
+        interactive: true,
+      });
       return {
         text: providerCard(p),
-        markup: providerKeyboard(p, config, {
-          username,
-          following: await following(userId, p.id),
-          interactive: true,
-        }),
+        rich: providerRichCard(p) + richButtons(keyboard),
         start: `p_${p.id.replace(/-/g, '')}`,
       };
     },
     ceremony: (p: ProviderView): View => ({
       text: ceremonyCard(p),
-      markup: ceremonyKeyboard(p, config),
+      rich: ceremonyRichCard(p) + richButtons(ceremonyKeyboard(p, config)),
       start: `c_${p.id.replace(/-/g, '')}`,
     }),
     async report(p: ProviderView) {
@@ -115,6 +120,60 @@ export function views(db: DB, config: Config) {
         start: 'graveyard',
       };
     },
+    async dashboard(role: string): Promise<View> {
+      const [[counts], [notify]] = await Promise.all([
+        db.query<{
+          incidents: number;
+          submissions: number;
+          memorials: number;
+          groups: number;
+          failed: number;
+        }>(
+          "SELECT (SELECT count(*)::int FROM incidents WHERE status='open') AS incidents,(SELECT count(*)::int FROM submissions WHERE status='pending') AS submissions,(SELECT count(*)::int FROM memorials WHERE status='pending') AS memorials,(SELECT count(*)::int FROM telegram_chats WHERE kind='group' AND enabled) AS groups,(SELECT count(*)::int FROM notifications WHERE status='failed') AS failed",
+        ),
+        db.query<{ online: boolean }>(
+          "SELECT EXISTS(SELECT 1 FROM worker_heartbeats WHERE last_seen_at>now()-interval '30 seconds') AS online",
+        ),
+      ]);
+      const c = counts!;
+      return {
+        text: '🗂 工作台',
+        rich:
+          `<h2>🗂 ${role === 'admin' ? '管理员' : '审核员'}工作台</h2><table bordered compact><tr><th>异常复核</th><th>投稿</th><th>留言</th></tr><tr><td>${c.incidents}</td><td>${c.submissions}</td><td>${c.memorials}</td></tr></table>` +
+          (role === 'admin'
+            ? `<p>通报群 ${c.groups} · 投递失败 ${c.failed} · Worker ${notify!.online ? '在线' : '离线'}</p>`
+            : '') +
+          richButtons(
+            markup([
+              [
+                { text: '🗂 待处理', callback_data: 'pd', style: 'primary' },
+                { text: '🔔 复核私信', callback_data: 'nt' },
+              ],
+              miniAppButton(config, '打开管理台', 'admin', true),
+              [
+                ...miniAppButton(config, '异常复核', 'incidents', true),
+                ...miniAppButton(config, '投稿审核', 'review_submissions', true),
+                ...miniAppButton(config, '留言审核', 'memorials', true),
+              ],
+              ...(role === 'admin'
+                ? [
+                    [
+                      ...miniAppButton(config, '机器人与通报群', 'telegram', true),
+                      ...miniAppButton(config, '用户权限', 'users', true),
+                    ],
+                    [
+                      ...miniAppButton(config, '检测队列', 'jobs', true),
+                      ...miniAppButton(config, '通知投递', 'notifications', true),
+                      ...miniAppButton(config, '审计', 'audit', true),
+                    ],
+                  ]
+                : []),
+              [{ text: '🔄 刷新', callback_data: 'ad' }],
+            ]),
+          ),
+        start: 'admin',
+      };
+    },
     async pending(): Promise<View> {
       const [[counts], incidents] = await Promise.all([
         db.query<{ incidents: number; submissions: number; memorials: number }>(
@@ -127,6 +186,7 @@ export function views(db: DB, config: Config) {
       const c = counts!;
       return {
         text: `🗂 <b>待处理</b>\n异常事件 ${c.incidents} · 投稿 ${c.submissions} · 追悼留言 ${c.memorials}`,
+        rich: `<h2>🗂 待处理</h2><table bordered compact><tr><th>异常复核</th><th>投稿审核</th><th>留言审核</th></tr><tr><td>${c.incidents}</td><td>${c.submissions}</td><td>${c.memorials}</td></tr></table>`,
         markup: markup([
           ...incidents.map((i) => [
             { text: clip(`⚠️ ${i.name}`, 60), callback_data: `ri:${i.id}` },
@@ -158,8 +218,9 @@ export function views(db: DB, config: Config) {
           `<blockquote>${escape(clip(row.summary, 1000))}</blockquote>`,
           `发起：${time(row.created_at)}`,
         ].join('\n'),
+        rich: `<h2>🧾 异常事件 · ${open ? '待复核' : '已处理'}</h2>${providerRichCard(p)}<details open><summary>异常记录</summary><p>${escape(clip(row.summary, 1000))}</p></details><footer>发起：${time(row.created_at)}</footer>`,
         markup: open
-          ? reviewKeyboard(row.id, miniAppLink(config, `p_${compactId(p.id)}`))
+          ? reviewKeyboard(row.id, miniAppLink(config, `i_${compactId(row.id)}`))
           : markup([[{ text: '‹ 待处理', callback_data: 'pd' }]]),
         start: 'pending',
       };
@@ -208,6 +269,7 @@ export function views(db: DB, config: Config) {
             { text: '‹ 待处理', callback_data: 'pd' },
             { text: '下一条 ›', callback_data: `ps:${offset + 1}` },
           ],
+          miniAppButton(config, '📱 打开审核表单', `s_${compactId(row.id)}`, true),
         ]),
         start: 'pending',
       };
@@ -234,6 +296,7 @@ export function views(db: DB, config: Config) {
             { text: '‹ 待处理', callback_data: 'pd' },
             { text: '下一条 ›', callback_data: `pm:${offset + 1}` },
           ],
+          miniAppButton(config, '📱 打开留言审核', `m_${compactId(row.id)}`, true),
         ]),
         start: 'pending',
       };

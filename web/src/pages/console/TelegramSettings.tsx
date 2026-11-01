@@ -25,6 +25,13 @@ interface BotStatus {
   pending_updates: number;
   last_error: string | null;
   hints: string[];
+  capabilities: {
+    inline: boolean;
+    guest: boolean;
+    miniapp: boolean;
+    groups: boolean;
+    privacy: boolean;
+  };
 }
 
 function SettingsForm({ initial }: { initial: Settings }) {
@@ -185,6 +192,20 @@ function SettingsForm({ initial }: { initial: Settings }) {
             {status.bot_name} <span>@{status.bot_username}</span>
           </h2>
           <ul className={styles.rows}>
+            {(
+              [
+                ['miniapp', 'Main Mini App'],
+                ['inline', 'Inline 分享'],
+                ['guest', '群组访客查询'],
+                ['groups', '允许加入群组'],
+                ['privacy', '群隐私模式'],
+              ] as const
+            ).map(([key, label]) => (
+              <li key={key}>
+                <span>{label}</span>
+                <span>{status.capabilities[key] ? '已开启' : '未开启'}</span>
+              </li>
+            ))}
             <li>
               <span>Webhook</span>
               <span className={styles.mono}>{status.webhook_url || '未注册'}</span>

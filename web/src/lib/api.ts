@@ -88,6 +88,8 @@ const messages: Record<string, string> = {
   HTTPS_REQUIRED: '公网地址需要使用 HTTPS，请修改部署配置 PUBLIC_URL',
   INVALID_STATE: '登录已过期，请重试',
   TELEGRAM_AUTH: 'Telegram 授权失败',
+  TELEGRAM_CANCELLED: '已取消 Telegram 授权',
+  RECIPIENT_REVOKED: '接收权限已撤销',
   ALREADY_LINKED: '这个 Telegram 已绑定其他账号',
   IDENTITY_MISMATCH: 'Telegram 身份不一致',
   REPLAY: '请重新打开 Mini App',

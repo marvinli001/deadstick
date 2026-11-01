@@ -9,6 +9,12 @@ interface TelegramWebApp {
   setBottomBarColor(color: string): void;
   openTelegramLink(url: string): void;
   requestWriteAccess(callback: (allowed: boolean) => void): void;
+  SettingsButton: {
+    show(): void;
+    hide(): void;
+    onClick(callback: () => void): void;
+    offClick(callback: () => void): void;
+  };
   BackButton: {
     show(): void;
     hide(): void;
@@ -42,6 +48,10 @@ export function miniAppPath(payload: string | null): string | undefined {
     review_submissions: '/console/submissions',
     memorials: '/console/memorials',
     telegram: '/console/telegram',
+    users: '/console/users',
+    jobs: '/console/jobs',
+    notifications: '/console/notifications',
+    audit: '/console/audit',
   };
   if (!payload) return undefined;
   if (Object.hasOwn(paths, payload)) return paths[payload];
@@ -57,10 +67,12 @@ export function miniAppPath(payload: string | null): string | undefined {
       return undefined;
     }
   }
-  const match = /^p_([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$/.exec(
-    payload,
-  );
-  return match ? `/airports/${match.slice(1).join('-')}` : undefined;
+  const match =
+    /^([pism])_([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$/.exec(payload);
+  if (!match) return undefined;
+  const id = match.slice(2).join('-');
+  const routes: Record<string, string> = { i: 'incidents', s: 'submissions', m: 'memorials' };
+  return match[1] === 'p' ? `/airports/${id}` : `/console/${routes[match[1]!]}?id=${id}`;
 }
 
 if (browser && isMiniApp) {
