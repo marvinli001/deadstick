@@ -12,8 +12,8 @@ export async function monitorSettings(db: DB) {
 }
 export async function schedule(db: DB, settings: MonitorSettings, now = Date.now()) {
   return db.transaction(async (tx) => {
-    const providers = await tx.query<{ id: string }>(
-      "SELECT id FROM providers WHERE enabled AND lifecycle<>'dead' AND next_check_at<=now() ORDER BY next_check_at FOR UPDATE SKIP LOCKED LIMIT $1",
+    const providers = await tx.query<{ id: string; next_check_at: Date }>(
+      "SELECT id,next_check_at FROM providers WHERE enabled AND lifecycle<>'dead' AND next_check_at<=now() ORDER BY next_check_at FOR UPDATE SKIP LOCKED LIMIT $1",
       [settings.batchSize],
     );
     const interval = settings.intervalHours * 3600 * 1000;
@@ -23,7 +23,7 @@ export async function schedule(db: DB, settings: MonitorSettings, now = Date.now
       if (next <= now) next += interval;
       await tx.query(
         'INSERT INTO check_jobs(provider_id,dedupe_key) VALUES ($1,$2) ON CONFLICT DO NOTHING',
-        [p.id, `scheduled:${p.id}:${Math.floor(now / interval)}`],
+        [p.id, `scheduled:${p.id}:${p.next_check_at.toISOString()}`],
       );
       await tx.query('UPDATE providers SET next_check_at=$1 WHERE id=$2', [new Date(next), p.id]);
     }

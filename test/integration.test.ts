@@ -366,6 +366,19 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
     await runCheck(storage.db, config, reclaimed[0]!, settings, fakeCheck(true));
     expect(await storage.db.query('SELECT * FROM check_runs')).toHaveLength(1);
   });
+  it('does not skip the next due slot after an initial check in the same day', async () => {
+    const p = await provider(),
+      settings = await monitorSettings(storage.db);
+    await schedule(storage.db, settings);
+    await storage.db.query(
+      "UPDATE providers SET next_check_at=now()-interval '1 second' WHERE id=$1",
+      [p.id],
+    );
+    await schedule(storage.db, settings);
+    expect(
+      await storage.db.query('SELECT id FROM check_jobs WHERE provider_id=$1', [p.id]),
+    ).toHaveLength(2);
+  });
   it('discards checks after configuration changes and retries worker failures', async () => {
     const p = await provider(),
       settings = await monitorSettings(storage.db);
