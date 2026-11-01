@@ -1,0 +1,175 @@
+.sheet {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(20px, 4vh, 40px);
+  min-height: calc(100dvh - 72px - 56px - 2 * var(--frame));
+  padding: clamp(28px, 4.5vh, 48px) clamp(16px, 4vw, 48px) clamp(16px, 3vh, 32px);
+}
+
+.stats {
+  position: absolute;
+  top: 8px;
+  right: clamp(16px, 4vw, 48px);
+  display: flex;
+  gap: 20px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.obituary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  width: 100%;
+  max-width: 760px;
+}
+
+.flower {
+  width: clamp(56px, 9vh, 88px);
+  height: auto;
+  margin-bottom: clamp(10px, 2vh, 20px);
+}
+
+.name {
+  font-size: clamp(3.25rem, min(9vw, 10vh), 6rem);
+  line-height: 1.05;
+  letter-spacing: 0.04em;
+  overflow-wrap: anywhere;
+}
+
+.name a {
+  text-decoration: none;
+}
+
+.dates {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0 18px;
+  margin-top: 18px;
+  font-size: clamp(15px, 2vw, 19px);
+}
+
+.dates span {
+  color: var(--ink-3);
+}
+
+.epitaph {
+  max-width: 32em;
+  margin-top: 16px;
+  font-family: var(--font-display);
+  font-size: 19px;
+  color: var(--ink-2);
+}
+
+.obituary > :last-child:not(.name):not(.flower) {
+  margin-top: clamp(20px, 3.5vh, 36px);
+}
+
+.tributeSlot {
+  height: 160px;
+}
+
+.search {
+  width: 100%;
+  max-width: 760px;
+  margin-top: auto;
+}
+
+.register {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 22px;
+  width: 100%;
+  padding-top: 18px;
+  border-top: 1px solid var(--ink);
+  font-family: var(--font-display);
+  font-size: 18px;
+}
+
+.register a {
+  color: var(--ink-2);
+  text-decoration: none;
+}
+
+.register a:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.register .all {
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.suspected {
+  margin: 24px clamp(16px, 4vw, 48px) 48px;
+}
+
+.suspected h2 {
+  font-size: 28px;
+  padding-bottom: 14px;
+  border-bottom: 3px solid var(--chry);
+}
+
+.suspected ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.suspected li {
+  border-bottom: 1px solid var(--rule);
+}
+
+.suspected a {
+  display: grid;
+  grid-template-columns: 1fr auto 120px auto;
+  align-items: center;
+  gap: 20px;
+  padding: 16px 0;
+  text-decoration: none;
+}
+
+.suspected a:hover .rowName {
+  text-decoration: underline;
+}
+
+.rowName {
+  font-family: var(--font-display);
+  font-size: 22px;
+}
+
+.rowTime {
+  font-size: 12px;
+  color: var(--ink-3);
+  text-align: right;
+}
+
+@media (max-width: 720px) {
+  .sheet {
+    padding-top: 40px;
+    gap: 32px;
+  }
+
+  .stats {
+    left: 16px;
+    right: 16px;
+    justify-content: center;
+  }
+
+  .suspected a {
+    grid-template-columns: 1fr auto;
+    gap: 6px 12px;
+  }
+
+  .rowTime {
+    text-align: left;
+  }
+}

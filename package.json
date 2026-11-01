@@ -10,7 +10,9 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "dev:worker": "tsx watch src/worker.ts",
+    "dev:web": "pnpm --filter @deadstick/web dev",
     "build": "tsc -p tsconfig.build.json",
+    "build:web": "pnpm --filter @deadstick/web build",
     "start": "node dist/server.js",
     "worker": "node dist/worker.js",
     "migrate": "tsx src/migrate.ts",
@@ -20,7 +22,7 @@
     "test": "vitest run",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "pnpm format:check && pnpm typecheck && pnpm test && pnpm build"
+    "check": "pnpm format:check && pnpm typecheck && pnpm test && pnpm build && pnpm build:web"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.5",
@@ -28,6 +30,7 @@
     "@fastify/helmet": "^13.2.0",
     "@fastify/multipart": "^10.1.6",
     "@fastify/rate-limit": "^11.2.1",
+    "@fastify/static": "^10.1.8",
     "@fastify/swagger": "^9.9.2",
     "@fastify/swagger-ui": "^6.1.2",
     "@fastify/type-provider-typebox": "^6.3.0",

@@ -1,0 +1,122 @@
+.flower {
+  display: block;
+  flex: none;
+  overflow: visible;
+}
+
+.petals ellipse {
+  fill: var(--paper);
+  stroke: var(--ink);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+
+.heart {
+  fill: var(--chry);
+  stroke: var(--ink);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+
+.candle,
+.incense {
+  display: block;
+  flex: none;
+  overflow: visible;
+}
+
+.body,
+.base {
+  fill: var(--paper);
+  stroke: var(--ink);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.line {
+  stroke: var(--ink);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.flame {
+  fill: var(--paper-3);
+  transform-origin: 20px 34px;
+  transition: fill var(--duration-standard) var(--ease-standard);
+}
+
+.lit .flame {
+  fill: var(--chry);
+  animation: flicker 1.6s var(--ease-in-out) infinite alternate;
+}
+
+.ember {
+  fill: var(--paper-3);
+  stroke: var(--ink);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.lit .ember {
+  fill: var(--chry);
+}
+
+.smoke {
+  fill: none;
+  stroke: var(--ink-3);
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
+  stroke-dasharray: 40;
+  stroke-dashoffset: 40;
+  opacity: 0;
+}
+
+.lit .smoke {
+  animation: rise 2.4s var(--ease-enter) infinite;
+}
+
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 15px;
+  letter-spacing: 0.14em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+@keyframes flicker {
+  from {
+    transform: scale(0.94, 0.9) skewX(-2deg);
+  }
+  to {
+    transform: scale(1.04, 1.06) skewX(2deg);
+  }
+}
+
+@keyframes rise {
+  0% {
+    stroke-dashoffset: 40;
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lit .flame,
+  .lit .smoke {
+    animation: none;
+  }
+  .lit .smoke {
+    stroke-dashoffset: 0;
+    opacity: 0.6;
+  }
+}

@@ -1,0 +1,69 @@
+.root {
+  position: relative;
+  width: 100%;
+}
+
+.root label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.root div:has(> input) {
+  min-height: 60px;
+  border-width: 2px;
+  padding: 0 18px;
+}
+
+.root input {
+  font-size: 18px;
+}
+
+.results {
+  position: absolute;
+  top: calc(100% - 2px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--paper);
+  border: 2px solid var(--ink);
+}
+
+.results a {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 18px;
+  text-decoration: none;
+}
+
+.results li + li {
+  border-top: 1px solid var(--rule);
+}
+
+.results a:hover,
+.results a:focus-visible {
+  background: var(--paper-2);
+  outline: none;
+}
+
+.name {
+  font-family: var(--font-display);
+  font-size: 20px;
+}
+
+.slug {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.none {
+  padding: 14px 18px;
+  color: var(--ink-3);
+}

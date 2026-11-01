@@ -1,4 +1,9 @@
 pnpm-lock.yaml
+web/src/components/arc
+web/public
+.agents
+.impeccable
+web/.impeccable
 node_modules
 dist
 coverage

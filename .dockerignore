@@ -1,8 +1,12 @@
 .git
-node_modules
+**/node_modules
 dist
+web/dist
 test
 .env
 .env.*
 coverage
 *.log
+.agents
+.impeccable
+web/.impeccable

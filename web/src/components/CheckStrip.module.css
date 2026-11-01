@@ -1,0 +1,41 @@
+.strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.cell {
+  width: 14px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  cursor: default;
+}
+
+.cell[data-interactive] {
+  cursor: pointer;
+}
+
+.cell[data-health='healthy'] {
+  background: var(--ink);
+}
+
+.cell[data-health='degraded'] {
+  background: var(--chry);
+  border-color: var(--chry-ink);
+}
+
+.cell[data-health='down'] {
+  background: var(--alarm);
+  border-color: var(--alarm);
+}
+
+.cell[data-health='unknown'] {
+  border-style: dashed;
+  border-color: var(--ink-3);
+}
+
+.cell:hover {
+  transform: scaleY(1.15);
+}

@@ -1,0 +1,107 @@
+.page {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 40px clamp(16px, 4vw, 48px) 64px;
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding-bottom: 20px;
+  border-bottom: 3px solid var(--ink);
+}
+
+.head h1 {
+  font-size: clamp(2.5rem, 6vw, 4rem);
+  line-height: 1;
+}
+
+.total {
+  font-size: 14px;
+  color: var(--ink-3);
+}
+
+.register {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.register li {
+  border-bottom: 1px solid var(--rule);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) auto 72px;
+  grid-template-areas: 'plot name dates tributes' '. epitaph epitaph .';
+  align-items: baseline;
+  gap: 4px 24px;
+  padding: 22px 12px;
+  text-decoration: none;
+  outline-offset: -2px;
+  transition: box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+.row:hover {
+  box-shadow: inset 0 0 0 4px var(--ink);
+}
+
+.plot {
+  grid-area: plot;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.name {
+  grid-area: name;
+  font-family: var(--font-display);
+  font-size: clamp(24px, 3vw, 34px);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.dates {
+  grid-area: dates;
+  display: flex;
+  gap: 14px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.dates em {
+  font-style: normal;
+  color: var(--ink-3);
+}
+
+.epitaph {
+  grid-area: epitaph;
+  font-family: var(--font-display);
+  font-size: 16px;
+  color: var(--ink-2);
+}
+
+.tributes {
+  grid-area: tributes;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.pager {
+  display: flex;
+  justify-content: center;
+  margin-top: 32px;
+}
+
+@media (max-width: 720px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: 'plot tributes' 'name name' 'dates dates' 'epitaph epitaph';
+    padding: 18px 4px;
+  }
+}

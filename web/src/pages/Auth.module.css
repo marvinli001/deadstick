@@ -1,0 +1,56 @@
+.page {
+  flex: 1;
+  display: grid;
+  place-items: start center;
+  padding: clamp(32px, 8vh, 96px) 16px 64px;
+}
+
+.card {
+  width: 100%;
+  max-width: 400px;
+}
+
+.card h1 {
+  margin-bottom: 32px;
+  font-size: 48px;
+  line-height: 1;
+  padding-bottom: 20px;
+  border-bottom: 3px solid var(--ink);
+}
+
+.form {
+  display: grid;
+  gap: 18px;
+}
+
+.or {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 24px 0;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.or::before,
+.or::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--rule);
+}
+
+.telegram {
+  width: 100%;
+  --border: var(--ink);
+}
+
+.foot {
+  margin-top: 28px;
+  font-size: 14px;
+  color: var(--ink-3);
+}
+
+.foot a {
+  color: var(--ink);
+}

@@ -1,8 +1,11 @@
 import Fastify from 'fastify';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
+import fastifyStatic from '@fastify/static';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import multipart from '@fastify/multipart';
@@ -15,6 +18,8 @@ import { catalogRoutes } from './catalog/routes.js';
 import { adminRoutes } from './routes/admin.js';
 import { telegramRoutes } from './telegram/routes.js';
 import { telegramSender, TelegramError, type TelegramSender } from './telegram/notifications.js';
+
+const staticPath = /^\/(?:(?:assets|fonts)\/|favicon\.svg(?:\?|$))/;
 
 export async function buildApp(
   db: DB,
@@ -49,8 +54,22 @@ export async function buildApp(
   });
   await app.register(cookie);
   await app.register(cors, { origin: config.corsOrigins, credentials: true });
-  await app.register(helmet, { crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' } });
-  await app.register(rateLimit, { max: 120, timeWindow: '1 minute' });
+  await app.register(helmet, {
+    crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+    // Telegram Web opens Mini Apps in an iframe; native clients use a webview.
+    frameguard: false,
+    contentSecurityPolicy: {
+      directives: {
+        frameAncestors: ["'self'", 'https://web.telegram.org'],
+        upgradeInsecureRequests: config.production ? [] : null,
+      },
+    },
+  });
+  await app.register(rateLimit, {
+    max: 120,
+    timeWindow: '1 minute',
+    allowList: (req) => staticPath.test(req.url),
+  });
   await app.register(multipart, {
     limits: {
       fileSize: 20 * 1024 * 1024,
@@ -77,8 +96,12 @@ export async function buildApp(
   app.decorateRequest('user', null);
   app.decorateRequest('sessionHash', null);
   app.decorateRequest('csrfToken', null);
-  app.addHook('preHandler', authHook(db, config));
+  const auth = authHook(db, config);
+  app.addHook('preHandler', async (req) => {
+    if (!staticPath.test(req.url)) await auth(req);
+  });
   app.addHook('onSend', async (req, reply, payload) => {
+    if (staticPath.test(req.url)) return payload;
     if (req.user || req.url.startsWith('/auth/') || req.url.startsWith('/admin/'))
       reply.header('Cache-Control', 'no-store');
     return payload;
@@ -132,5 +155,24 @@ export async function buildApp(
   adminRoutes(app, db, config, sender);
   telegramRoutes(app, db, config, sender);
   app.get('/openapi.json', { schema: { hide: true } }, async () => app.swagger());
+  if (existsSync(join(config.webDist, 'index.html'))) {
+    await app.register(fastifyStatic, {
+      root: config.webDist,
+      wildcard: false,
+      index: false,
+      setHeaders: (reply, path) => {
+        if (/[\\/](assets|fonts)[\\/]/.test(path))
+          reply.header('Cache-Control', 'public, max-age=31536000, immutable');
+        else reply.header('Cache-Control', 'no-cache');
+      },
+    });
+    app.setNotFoundHandler((req, reply) => {
+      if (['GET', 'HEAD'].includes(req.method) && req.headers.accept?.includes('text/html'))
+        return reply.header('Cache-Control', 'no-cache').sendFile('index.html');
+      return reply
+        .code(404)
+        .send({ error: { code: 'NOT_FOUND', message: 'Route not found' }, requestId: req.id });
+    });
+  }
   return app;
 }

@@ -1,0 +1,87 @@
+.form {
+  display: grid;
+  gap: 22px;
+}
+
+.pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.group {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 20px 0 0;
+  border: 0;
+  border-top: 1px solid var(--ink);
+}
+
+.group legend {
+  float: left;
+  width: 100%;
+  margin-bottom: 4px;
+  font-family: var(--font-display);
+  font-size: 20px;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  align-items: center;
+  gap: 12px;
+}
+
+/* The legend names the group; per-row labels stay for screen readers only. */
+.row label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.row[data-kind='website'] {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 160px) 36px;
+}
+
+.remove {
+  width: 36px;
+  padding: 0;
+}
+
+.add {
+  justify-self: start;
+  padding-left: 0;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.submit {
+  min-width: 160px;
+}
+
+@media (max-width: 640px) {
+  .pair {
+    grid-template-columns: 1fr;
+  }
+
+  .row[data-kind='website'] {
+    grid-template-columns: minmax(0, 1fr) 36px;
+  }
+
+  .row[data-kind='website'] > :nth-child(2) {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .submit {
+    flex: 1;
+  }
+}
