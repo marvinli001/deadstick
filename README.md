@@ -150,3 +150,11 @@ TEST_DATABASE_URL=postgres://deadstick:deadstick@localhost:5432/deadstick_test p
 Telegram 和真实机场的在线联调需要你提供自己的 BotFather 配置与监测订阅，测试不会访问或修改任何真实机器人。
 
 参考：[Telegram Bot API](https://core.telegram.org/bots/api)、[新版 Telegram Login](https://core.telegram.org/bots/telegram-login)、[grammY](https://grammy.dev/)、[Mihomo 源码与许可](https://github.com/MetaCubeX/mihomo/tree/v1.19.33)。
+
+## 参与开发
+
+- [CONTRIBUTING.md](CONTRIBUTING.md)：开发环境、代码约定、分支、提交、迁移与发布流程。
+- [SECURITY_GUIDE.md](SECURITY_GUIDE.md)：编写与审查代码时的安全要求。
+- [SECURITY.md](SECURITY.md)：漏洞报告方式与处理流程。
+- [TODO.md](TODO.md)：待办与认领。
+- [CHANGELOG.md](CHANGELOG.md)：版本变更记录。
