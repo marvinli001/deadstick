@@ -9,6 +9,8 @@ import { AppError } from '../errors.js';
 import { audit } from '../catalog/service.js';
 import { Page } from '../catalog/schemas.js';
 import { type TelegramSender, TelegramError } from './notifications.js';
+import { saveTelegramSettings, telegramSettingsView } from './settings.js';
+import { botStatus, setupBot } from './management.js';
 
 export function telegramRoutes(
   app: FastifyInstance,
@@ -17,6 +19,56 @@ export function telegramRoutes(
   sender?: TelegramSender,
 ) {
   const api = app.withTypeProvider<TypeBoxTypeProvider>();
+  api.get(
+    '/admin/telegram/settings',
+    { preHandler: administrator, schema: { tags: ['telegram'] } },
+    async () => telegramSettingsView(config),
+  );
+  api.put(
+    '/admin/telegram/settings',
+    {
+      preHandler: administrator,
+      schema: {
+        tags: ['telegram'],
+        body: Type.Object(
+          {
+            botUsername: Type.String({
+              maxLength: 33,
+              pattern: '^(@?[A-Za-z][A-Za-z0-9_]{3,31})?$',
+            }),
+            botToken: Type.Optional(
+              Type.String({ maxLength: 256, pattern: '^([0-9]+:[A-Za-z0-9_-]{20,})?$' }),
+            ),
+            webhookSecret: Type.Optional(
+              Type.String({ maxLength: 256, pattern: '^([A-Za-z0-9_-]{32,256})?$' }),
+            ),
+            telegramClientId: Type.String({ maxLength: 256 }),
+            telegramClientSecret: Type.Optional(Type.String({ maxLength: 512 })),
+          },
+          { additionalProperties: false },
+        ),
+      },
+    },
+    (req) => saveTelegramSettings(db, config, req.body, req.user!.id),
+  );
+  api.post(
+    '/admin/telegram/test',
+    { preHandler: administrator, schema: { tags: ['telegram'] } },
+    async () => {
+      if (!config.botToken || !sender)
+        throw new AppError(503, 'NOT_CONFIGURED', 'Telegram bot is not configured');
+      return botStatus(sender);
+    },
+  );
+  api.post(
+    '/admin/telegram/setup',
+    { preHandler: administrator, schema: { tags: ['telegram'] } },
+    async (req) => {
+      if (!sender) throw new AppError(503, 'NOT_CONFIGURED', 'Telegram bot is not configured');
+      await audit(db, req.user!.id, 'telegram.setup', 'telegram');
+      return setupBot(db, config, sender);
+    },
+  );
   api.post(
     '/telegram/webhook',
     {

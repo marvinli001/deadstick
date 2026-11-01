@@ -4,9 +4,9 @@
 
 ## 凭据与配置
 
-- 凭据只通过环境变量提供。`.env` 已被 `.gitignore` 忽略，不得提交；`.env.example` 只写空值或明显的占位符。
+- 部署凭据通过环境变量提供。Telegram 凭据也可由管理员在后台配置，使用 `APP_KEY` 加密入库，读取接口只返回是否设置，留空保留已有密钥；日志和审计不得记录凭据。`.env` 已被 `.gitignore` 忽略，不得提交；`.env.example` 只写空值或明显的占位符。
 - 测试与文档中的 token、订阅地址、密码一律使用虚构值，如 `YOUR_PRIVATE_TOKEN`。
-- `APP_KEY` 用于加密订阅地址、PKCE verifier 与机器人原始更新。生产环境的 `APP_KEY` 必须固定，与数据库分开备份；更换后已有密文无法解密。
+- `APP_KEY` 用于加密订阅地址、PKCE verifier、机器人原始更新与后台 Telegram 凭据。生产环境的 `APP_KEY` 必须固定，与数据库分开备份；更换后已有密文无法解密。
 - 凭据泄露时：机器人 token 在 BotFather 重新生成，`TELEGRAM_WEBHOOK_SECRET` 更换后重新运行 `pnpm telegram:setup`，OIDC Client Secret 在 BotFather 重置，数据库密码同步修改 `POSTGRES_PASSWORD` 与 `DATABASE_URL`。`APP_KEY` 泄露需要重新加密全部密文，目前没有现成工具，见 [TODO.md](TODO.md)。
 - `ADMIN_PASSWORD` 只供 `pnpm admin` 初始化使用，完成后从 `.env` 移除。
 

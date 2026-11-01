@@ -19,6 +19,7 @@ import { bootstrapAdmin } from '../src/auth/bootstrap.js';
 import { createBot, processBotUpdates } from '../src/telegram/bot.js';
 import { dispatchNotifications, enqueue, TelegramError } from '../src/telegram/notifications.js';
 import type { CheckEndpoint } from '../src/monitor/check.js';
+import { telegramConfig } from '../src/telegram/settings.js';
 
 const connection = process.env.TEST_DATABASE_URL;
 describe.skipIf(!connection)('PostgreSQL integration', () => {
@@ -71,6 +72,7 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
     }
   });
   beforeEach(async () => {
+    await storage.db.query("DELETE FROM settings WHERE key='telegram'");
     await storage.db.query(
       'TRUNCATE users,providers,telegram_chats,notifications,bot_updates,auth_replays,worker_heartbeats RESTART IDENTITY CASCADE',
     );
@@ -417,6 +419,247 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       (await storage.db.query('SELECT status FROM check_jobs WHERE id=$1', [failing!.id]))[0]!
         .status,
     ).toBe('pending');
+  });
+  it('restricts bot settings, connection checks and setup to administrators with CSRF', async () => {
+    for (const [method, url] of [
+      ['GET', '/admin/telegram/settings'],
+      ['PUT', '/admin/telegram/settings'],
+      ['POST', '/admin/telegram/test'],
+      ['POST', '/admin/telegram/setup'],
+    ] as const) {
+      const payload =
+        method === 'PUT' ? { botUsername: 'test_bot', telegramClientId: '' } : undefined;
+      expect((await app.inject({ method, url, payload })).statusCode).toBe(401);
+      expect((await app.inject({ method, url, payload, headers: member })).statusCode).toBe(403);
+      if (method !== 'GET')
+        expect(
+          (await app.inject({ method, url, payload, headers: { cookie: admin.cookie } }))
+            .statusCode,
+        ).toBe(403);
+    }
+    await storage.db.query("UPDATE users SET role='moderator' WHERE id=$1", [userId]);
+    expect(
+      (await app.inject({ url: '/admin/telegram/settings', headers: member })).statusCode,
+    ).toBe(403);
+  });
+  it('encrypts bot settings and applies them to API requests and independent worker reads', async () => {
+    const payload = {
+      botUsername: '@configured_bot',
+      botToken: '123456:fake_token_for_settings_tests_only',
+      telegramClientId: 'oidc-client',
+      telegramClientSecret: 'fake-oidc-client-secret',
+    };
+    const result = await app.inject({
+      method: 'PUT',
+      url: '/admin/telegram/settings',
+      headers: admin,
+      payload,
+    });
+    expect(result.statusCode).toBe(200);
+    expect(result.json()).toMatchObject({
+      bot_username: 'configured_bot',
+      bot_token_set: true,
+      webhook_secret_set: true,
+      client_secret_set: true,
+    });
+    const worker = await telegramConfig(storage.db, config);
+    expect(worker).toMatchObject({
+      botToken: payload.botToken,
+      botUsername: 'configured_bot',
+      telegramClientSecret: payload.telegramClientSecret,
+    });
+    expect(worker.webhookSecret).toBe(config.webhookSecret);
+    const restarted = await buildApp(storage.db, config, { logger: false });
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        new Response(JSON.stringify({ ok: true, result: { username: 'configured_bot' } })),
+      );
+    try {
+      expect(
+        (
+          await restarted.inject({
+            method: 'POST',
+            url: '/admin/telegram/api/getMe',
+            headers: admin,
+            payload: {},
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        `https://api.telegram.org/bot${payload.botToken}/getMe`,
+        expect.any(Object),
+      );
+    } finally {
+      fetchMock.mockRestore();
+      await restarted.close();
+    }
+    const publicConfig = await app.inject({ url: '/auth/telegram/config' });
+    expect(publicConfig.json()).toEqual({ bot_username: 'configured_bot', oidc_enabled: true });
+    const view = await app.inject({ url: '/admin/telegram/settings', headers: admin });
+    const stored = await storage.db.query("SELECT value FROM settings WHERE key='telegram'");
+    const auditRows = await storage.db.query(
+      "SELECT * FROM audit_log WHERE action='settings.telegram'",
+    );
+    expect(auditRows).toHaveLength(1);
+    const visible =
+      result.body +
+      view.body +
+      publicConfig.body +
+      JSON.stringify(stored) +
+      JSON.stringify(auditRows);
+    for (const secret of [payload.botToken, payload.telegramClientSecret, config.webhookSecret!])
+      expect(visible).not.toContain(secret);
+    const rotated = 'rotated_webhook_secret_123456789012345';
+    expect(
+      (
+        await app.inject({
+          method: 'PUT',
+          url: '/admin/telegram/settings',
+          headers: admin,
+          payload: {
+            botUsername: 'configured_bot',
+            botToken: '',
+            webhookSecret: rotated,
+            telegramClientId: '',
+            telegramClientSecret: '',
+          },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const updated = await telegramConfig(storage.db, {
+      ...config,
+      telegramClientId: 'env-client',
+      telegramClientSecret: 'env-secret',
+    });
+    expect(updated.botToken).toBe(payload.botToken);
+    expect(updated.webhookSecret).toBe(rotated);
+    expect(updated.telegramClientId).toBeUndefined();
+    expect(updated.telegramClientSecret).toBeUndefined();
+    for (const [secret, expected] of [
+      [config.webhookSecret!, 401],
+      [rotated, 200],
+    ] as const)
+      expect(
+        (
+          await app.inject({
+            method: 'POST',
+            url: '/telegram/webhook',
+            headers: { 'x-telegram-bot-api-secret-token': secret },
+            payload: { update_id: 912 },
+          })
+        ).statusCode,
+      ).toBe(expected);
+  });
+  it('generates a webhook secret for a new bot and rejects malformed settings', async () => {
+    const fresh = await buildApp(
+      storage.db,
+      { ...config, botToken: undefined, webhookSecret: undefined },
+      { logger: false, sender },
+    );
+    try {
+      const payload = {
+        botUsername: 'configured_bot',
+        botToken: '123456:fake_token_for_settings_tests_only',
+        telegramClientId: '',
+      };
+      for (const invalid of [
+        { botToken: 'invalid' },
+        { botUsername: 'bad/name' },
+        { webhookSecret: 'short' },
+        { telegramClientId: 'client-without-secret' },
+        { unexpected: 'field' },
+      ])
+        expect(
+          (
+            await fresh.inject({
+              method: 'PUT',
+              url: '/admin/telegram/settings',
+              headers: admin,
+              payload: { ...payload, ...invalid },
+            })
+          ).statusCode,
+        ).toBe(400);
+      expect(
+        (
+          await fresh.inject({
+            method: 'PUT',
+            url: '/admin/telegram/settings',
+            headers: admin,
+            payload,
+          })
+        ).statusCode,
+      ).toBe(200);
+      const saved = await telegramConfig(storage.db, config);
+      expect(saved.webhookSecret).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    } finally {
+      await fresh.close();
+    }
+  });
+  it('checks bot connectivity and initializes commands, Mini App and webhook without dropping updates', async () => {
+    const configured = {
+      ...config,
+      botUsername: 'configured_bot',
+      publicUrl: 'https://deadstick.example',
+    };
+    const setup = await buildApp(storage.db, configured, { logger: false, sender });
+    sender.send.mockImplementation(async (method) =>
+      method === 'getMe'
+        ? { username: 'configured_bot', first_name: 'Deadstick', can_join_groups: true }
+        : method === 'getWebhookInfo'
+          ? { url: `${configured.publicUrl}/telegram/webhook`, pending_update_count: 0 }
+          : true,
+    );
+    try {
+      const status = await setup.inject({
+        method: 'POST',
+        url: '/admin/telegram/test',
+        headers: admin,
+      });
+      expect(status.statusCode).toBe(200);
+      expect(status.json()).toMatchObject({ bot_username: 'configured_bot', pending_updates: 0 });
+      expect(sender.send.mock.calls.map(([method]) => method)).toEqual(['getMe', 'getWebhookInfo']);
+      sender.send.mockClear();
+      const result = await setup.inject({
+        method: 'POST',
+        url: '/admin/telegram/setup',
+        headers: admin,
+      });
+      expect(result.statusCode).toBe(200);
+      expect(sender.send).toHaveBeenCalledWith(
+        'setWebhook',
+        expect.objectContaining({
+          url: `${configured.publicUrl}/telegram/webhook`,
+          secret_token: config.webhookSecret,
+          drop_pending_updates: false,
+        }),
+      );
+      expect(sender.send).toHaveBeenCalledWith('setChatMenuButton', {
+        menu_button: { type: 'web_app', text: 'Deadstick', web_app: { url: configured.publicUrl } },
+      });
+      expect(sender.send).toHaveBeenCalledWith(
+        'setMyCommands',
+        expect.objectContaining({ scope: { type: 'chat', chat_id: '100' } }),
+      );
+      sender.send.mockResolvedValue({ username: 'different_bot' });
+      sender.send.mockClear();
+      expect(
+        (
+          await setup.inject({ method: 'POST', url: '/admin/telegram/setup', headers: admin })
+        ).json().error.code,
+      ).toBe('BOT_USERNAME_MISMATCH');
+      expect(sender.send.mock.calls.map(([method]) => method)).toEqual(['getMe']);
+      sender.send.mockRejectedValue(new TelegramError(401));
+      const failed = await setup.inject({
+        method: 'POST',
+        url: '/admin/telegram/test',
+        headers: admin,
+      });
+      expect(failed.statusCode).toBe(502);
+      expect(failed.body).not.toContain(config.botToken);
+    } finally {
+      await setup.close();
+    }
   });
   it('persists and deduplicates all Telegram updates, including unknown new fields', async () => {
     const payload = {

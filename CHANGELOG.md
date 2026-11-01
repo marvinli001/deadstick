@@ -8,6 +8,7 @@
 
 ### 新增
 
+- 后台「Telegram → 配置」支持加密保存 Bot 与 OIDC 凭据、测试连接、初始化 Webhook 和命令菜单；API 与 worker 自动读取配置，无需重启。
 - Telegram 主入口：Bot `/app`、`/me`、`/admin` 与角色菜单；Mini App 原生返回、移动端底部导航、安全区适配、TG 内页面深链；投稿、机场详情与管理台复用现有页面。
 - `ADMIN_TELEGRAM_ID` 支持无需邮箱密码初始化管理员；Mini App 内可请求 Bot 私信权限、开关审核待办私信；后台角色变更通过 outbox 同步命令菜单。
 - `GET /auth/telegram/config`、`GET/PUT /admin/telegram/notifications`；OIDC 支持站内 `next` 目标并将其绑定到授权挑战。
