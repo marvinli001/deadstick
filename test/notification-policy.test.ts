@@ -25,6 +25,13 @@ describe('notification policy', () => {
     expect(eventTitle({ type: 'anomaly' })).toBe('检测异常 · 尚未确认跑路');
     expect(eventTitle({ type: 'recovery', manual: true })).toBe('人工核验：服务恢复');
   });
+  it('keeps the spectator preset limited to confirmed deaths and revivals', () => {
+    const provider = { id: 'one', tags: [] };
+    expect(matchesPolicy(presets.spectator!, 'dead', provider, true)).toBe(true);
+    expect(matchesPolicy(presets.spectator!, 'revival', provider, true)).toBe(true);
+    expect(matchesPolicy(presets.spectator!, 'recovery', provider, true)).toBe(false);
+    expect(matchesPolicy(presets.spectator!, 'dismissed', provider, true)).toBe(false);
+  });
   it('defers through overnight quiet hours in the configured timezone', () => {
     const p = {
       ...defaultPolicy,

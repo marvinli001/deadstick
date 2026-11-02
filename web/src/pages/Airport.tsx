@@ -13,6 +13,7 @@ import { api, ApiError, errorText } from '@/lib/api';
 import { ago, count, dateTime, day, daysBetween } from '@/lib/format';
 import { useChecks, useFollow, useMemorials, useProvider } from '@/lib/queries';
 import { useSession } from '@/lib/session';
+import { isMiniApp, telegram } from '@/lib/telegram';
 import type { ProviderDetail } from '@/lib/types';
 import NotFound from './NotFound';
 import styles from './Airport.module.css';
@@ -38,9 +39,18 @@ function FollowButton({ provider, slug }: { provider: ProviderDetail; slug: stri
       loading={follow.isPending}
       onClick={() => {
         if (!user) return navigate(`/login?next=${encodeURIComponent(location.pathname)}`);
-        follow.mutate(!following, {
-          onError: (error) => toast({ type: 'error', title: errorText(error) }),
-        });
+        const update = (writeAllowed = true) =>
+          follow.mutate(!following, {
+            onSuccess: () => {
+              if (!writeAllowed) toast({ type: 'info', title: '已关注，Bot 私信未开启' });
+            },
+            onError: (error) => toast({ type: 'error', title: errorText(error) }),
+          });
+        if (!following && isMiniApp && telegram?.isVersionAtLeast('6.9')) {
+          telegram.requestWriteAccess(update);
+          return;
+        }
+        update();
       }}
     >
       {following ? <BellOff size={16} strokeWidth={1.75} /> : <Bell size={16} strokeWidth={1.75} />}

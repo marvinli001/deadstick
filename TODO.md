@@ -21,7 +21,7 @@
 ## Telegram
 
 - [x] Mini App 复用现有页面，接入统一 Telegram 身份、原生返回、安全区和底部导航。
-- [ ] 使用真实 BotFather 配置按 [docs/telegram.md](docs/telegram.md) 联调：webhook、分作用域命令菜单、inline 与 Guest Mode、群内 ephemeral 命令与 15 秒回复时限、`/bind` 与论坛话题通知、按钮复核与 force reply、rich message 检测报告在各客户端的显示。
+- [ ] 使用真实 BotFather 配置按 [docs/telegram.md](docs/telegram.md) 联调：webhook、分作用域命令菜单、私聊查询 / 关注确认 / 报信 / 取消、inline 与 Guest Mode、群内 ephemeral 命令与 15 秒回复时限、本群设置与论坛话题通知、日报和静默、投稿补交、按钮复核与 force reply、rich message 检测报告在各客户端的显示。
 - [x] 审核员角色变更通过 outbox 同步私聊命令菜单，独立于通知开关。
 
 ## 检测

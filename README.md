@@ -7,10 +7,13 @@
 - 邮箱密码注册 / 登录、可撤销会话、CSRF、防暴力登录、管理员 / 审核员 / 用户权限。
 - Telegram 新版 **OIDC + PKCE** 登录、自动注册、已有账号绑定，以及 Mini App `initData` 验签、时效和重放保护。OIDC `sub` 和 Bot API 用户 ID 分别存储。
 - 机场资料、标签、多官网、多订阅；管理员直接录入或用户投稿后审核。订阅和原始机器人更新以 AES-256-GCM 加密存储。
+- Bot 私聊支持直接发机场名、别名或官网域名，以及查询、关注、退订、报信和取消；关注需确认，对话上下文保留 15 分钟并支持跨 worker 接续。
+- Bot 与 Mini App 统一搜索名称、标识、别名和公开官网域名。普通投稿只需名称和官网，自动生成标识；支持查重、给已有机场补线索、审核要求补充与本人补交，草稿不保存订阅凭据。
+- 群管理员可在 Mini App 配置本群查询、通知范围、事件、话题、时区、静默、实时或日报、频率与口吻；个人可选择仅收人工结论。新群默认只开查询，旧绑定保留已有通知设置。
 - 默认每 24 小时检测，按机场稳定错峰、分批入队；独立 worker、数据库队列、多 worker 抢占锁、租约、失败重试、过期任务接管、配置变更结果隔离。
 - 官网 HTTP / TLS 检测、Clash YAML / sing-box / Base64 URI / Surge 订阅解析、过期与流量额度检查、节点抽样检测。
 - **真实代理出网模式**：使用 Mihomo 临时进程，经抽样节点访问 HTTPS 204 探针，验证代理握手和请求。也可明确选择 TCP 连通性模式。单节点配置经过白名单重建，节点域名解析后固定到公网 IP，不执行订阅中的全局配置、规则、外部 provider 或代理链。
-- 连续失败达到阈值后，创建一次异常事件，通知允许的群和绑定的审核员；只有人工提交原因及证据后才能确认跑路。自动恢复会关闭未确认异常，已确认的墓碑只能人工复活。
+- 连续失败达到阈值后，创建一次异常事件，通知允许的群和绑定的审核员；只有人工提交原因及证据后才能确认跑路。自动恢复会关闭检测触发的未确认异常；人工线索关联的复核保留到人工处理，已确认的墓碑只能人工复活。
 - 墓园列表、墓志铭、献花 / 点烛 / 上香、每天每人每种一次、审核后的追悼留言、关注和状态变更通知。
 - Telegram 机器人：HTML 卡片与彩色按钮、墓园分页、深链、追悼会实时计数、inline 分享、Guest Mode 回复、群内仅本人可见的 ephemeral 命令与回复、rich message 检测报告；审核员在私聊用按钮加回复完成异常复核、投稿与留言审核；群通过 `/bind` 或入群提醒绑定，支持论坛话题。
 - 完整 Bot API JSON / multipart 管理调用入口，不裁剪新参数；持久化接收所有当前更新类型并保留未知字段。应用没有为支付、商务代聊等与机场监测无关的功能设计业务流程；这些能力可通过完整 API 入口调用，原始事件可在管理接口读取。
@@ -62,7 +65,9 @@ Compose 包含 PostgreSQL、一次性迁移、API、worker。数据库没有暴�
 2. Mini App 使用 Bot token 验签并自动登录，不需要 OIDC 凭据。管理员从外部浏览器登录时，可在同页填写 BotFather Login Widget 的 Client ID、Client Secret，登记页面显示的回调地址。
 3. 保存后点「测试连接」和「初始化 Webhook 与菜单」，按页面提示补齐 BotFather 设置。也可运行 `pnpm telegram:setup`（容器内 `docker compose run --rm api node dist/telegram/setup.js`），命令会读取后台已保存的配置。
 4. 用 `ADMIN_TELEGRAM_ID` 初始化管理员，私聊机器人点 Start，发送 `/admin` 打开管理台。在 Mini App「我的」开启 Bot 私信与审核待办私信；也可使用 `/notify`。其他用户先打开 Bot 或 Mini App，再由管理员按 Telegram ID 分配审核角色。
-5. 把机器人加入群，管理员点私信里的“绑定为通报群”，或在群（论坛话题）里发送 `/bind`。
+5. 把机器人加入群，本群管理员在群（论坛话题）里发送 `/bind` 或 `/groupsetup` 打开本群设置。新绑定默认只允许查询，主动通知需在 Mini App 中明确开启；普通群管不因此获得站内审核权限。
+
+从旧版本升级时先停止旧 worker，运行迁移 `005`–`007`，再同步启动新版本 API 与 worker，并运行 `pnpm telegram:setup` 刷新 `/cancel`、`/groupsetup` 等命令菜单。旧 worker 不识别新通知策略，不可与已启用新群设置的 API 混用。没有新增环境变量。
 
 邮箱和 Telegram 是独立身份；系统不会根据昵称合并账号。一个 Telegram 已经属于另一个账号时，绑定返回冲突；可用 Telegram 登录原账号，由管理员给该账号分配审核权限。关闭 Telegram 配置时，普通 REST API 和监测仍可独立使用。
 
@@ -80,6 +85,8 @@ OIDC 登录流程：`GET /auth/telegram/start?next=/console` 获得授权 URL �
 | 机场库 / 详情 / 检测记录 / 统计   | `GET /providers`、`GET /providers/:id`、`GET /providers/slug/:slug`、`GET /providers/:id/checks`、`GET /stats`                         |
 | 墓园 / 祭奠 / 留言                | `GET /graveyard`、`POST /providers/:id/tributes`、`GET/POST /providers/:id/memorials`                                                  |
 | 投稿 / 我的投稿                   | `POST /submissions`、`GET /submissions/mine`                                                                                           |
+| 查重 / 本人投稿详情与补交         | `POST /submissions/check`、`GET/PUT /submissions/:id`                                                                                  |
+| 已有机场线索                      | `POST /providers/:id/submissions`                                                                                                      |
 | 关注                              | `PUT/DELETE /providers/:id/follow`、`GET /follows`                                                                                     |
 | 管理列表 / 录入 / 修改 / 停启监测 | `GET/POST /admin/providers`、`GET/PUT /admin/providers/:id`、`PATCH /admin/providers/:id/monitoring`                                   |
 | 投稿审核                          | `GET /admin/submissions`、`POST /admin/submissions/:id/review`                                                                         |
@@ -90,12 +97,18 @@ OIDC 登录流程：`GET /auth/telegram/start?next=/console` 获得授权 URL �
 | 机器人绑定 / 完整 API / 事件      | `/admin/telegram/chats`、`/admin/telegram/api/:method`、`/admin/telegram/updates`                                                      |
 | Telegram 配置 / 个人审核私信      | `GET /auth/telegram/config`、`GET/PUT /admin/telegram/notifications`（审核员管理自己的待办私信）                                       |
 | 管理员 Bot 配置 / 测试 / 初始化   | `GET/PUT /admin/telegram/settings`、`POST /admin/telegram/test`、`POST /admin/telegram/setup`                                          |
+| 本群设置 / 通知测试               | `GET/PUT /telegram/groups/:id`、`POST /telegram/groups/:id/test`                                                                       |
+| 个人通知偏好                      | `GET/PUT /telegram/notifications/preferences`                                                                                          |
 
 `GET /providers`、`GET /graveyard`、`GET /admin/providers` 返回 `{ items, total, limit, offset }`。机场详情额外返回 `follower_count`、`memorial_count` 和 `following`（未登录为 `null`）。`GET /auth/me` 的 `user` 带 `has_password`，前端据此决定是否允许解绑 Telegram。
 
 登录响应设置 `HttpOnly`、`SameSite=Lax` cookie（生产增加 `Secure`）并返回 `csrfToken`。前端请求启用 `credentials: include`，写操作在 `X-CSRF-Token` 中发送该值；刷新后从 `/auth/me` 读取。建议网站与 API 使用同一主域的子域或同源反代，不支持第三方站点跨站 cookie 登录。非浏览器客户端可从登录响应取会话 cookie，作为 `Authorization: Bearer <session>` 使用。
 
-分页使用 `limit`（1–100）和 `offset`。`GET /providers` 还支持 `q`、`tag`、`lifecycle=active|suspected|dead`。异常响应为 `{ "error": { "code": "...", "message": "..." }, "requestId": "..." }`。
+分页使用 `limit`（1–100）和 `offset`。`GET /providers` 还支持 `q`、`tag`、`lifecycle=active|suspected|dead`；搜索匹配名称、标识、别名和公开官网域名，按精确、前缀、包含排序，URL 查询先剥离路径和参数。异常响应为 `{ "error": { "code": "...", "message": "..." }, "requestId": "..." }`。
+
+`POST /submissions` 的 `slug` 可省略，由服务端生成。`POST /submissions/check` 接收 `{ name, website? }`，只返回公开候选；`GET/PUT /submissions/:id` 仅限本人，只有 `needs_info` 可补交，未重新填写订阅时保留原加密订阅。已有机场线索接收 `{ kind: website|abnormal|evidence|review, body, website?, evidenceUrls? }`，内容仅本人和审核员可见。审核接口支持 `{ action: approved|rejected|needs_info, reason }`，兼容原 `{ approve, reason }`；批准线索关联人工复核，不直接确认跑路。机场资料新增 `aliases`，旧管理员更新请求省略时保留原别名。
+
+群设置接口每次校验当前本群管理员或站内管理员身份；群 ID 和 Mini App 链接不构成授权。策略字段以 `/docs` 为准，查询开关与主动通知开关独立。个人通知偏好仅作用于本人的关注通知，不影响审核待办私信开关。
 
 创建机场 / 投稿示例：
 

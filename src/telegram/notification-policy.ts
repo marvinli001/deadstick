@@ -64,6 +64,7 @@ export const presets: Record<string, NotificationPolicy> = {
     ...defaultPolicy,
     enabled: true,
     conclusionsOnly: true,
+    events: ['dead', 'revival'],
     tone: 'playful',
     quietStart: '23:00',
     quietEnd: '08:00',

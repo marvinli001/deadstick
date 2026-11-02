@@ -8,6 +8,8 @@ import { loadConfig } from '../src/config.js';
 import { createBot } from '../src/telegram/bot.js';
 import { conversationIntent } from '../src/telegram/conversation.js';
 import { cleanup } from '../src/monitor/queue.js';
+import { encrypt } from '../src/crypto.js';
+import { miniAppPath } from '../web/src/lib/telegram.js';
 
 describe('private conversation intents', () => {
   it.each([
@@ -161,6 +163,45 @@ describe.skipIf(!connection)('private Bot conversations with PostgreSQL', () => 
     expect(calls).toHaveLength(0);
     await text(`/start p_${providerId.replace(/-/g, '')}`);
     expect(output()).toContain('测试云');
+  });
+  it('connects public-domain search, alias lookup, follow confirmation and provider lead navigation', async () => {
+    await storage.db.query("UPDATE providers SET aliases=ARRAY['旧机场名'] WHERE id=$1", [
+      providerId,
+    ]);
+    await storage.db.query(
+      `INSERT INTO endpoints(provider_id,kind,label,display_host,public_url,url_ciphertext)
+        VALUES ($1,'website','官网','www.airport.example','https://www.airport.example/',$2)`,
+      [providerId, encrypt('https://www.airport.example/', config.appKey)],
+    );
+    await text('https://www.airport.example/private/path?token=never-publish');
+    expect(calls.at(-1)!.method).toBe('sendRichMessage');
+    expect(output()).toContain('测试云');
+    expect(output()).not.toContain('never-publish');
+    expect(output()).not.toContain('/private/path');
+    await text('蹲一下这家');
+    await press(button('确认关注'), 42, false, otherBot);
+    expect((await follows())[0]!.provider_id).toBe(providerId);
+    await text('给旧机场名补线索');
+    const keyboard = calls.at(-1)!.payload.reply_markup as InlineKeyboardMarkup;
+    const launch = keyboard.inline_keyboard.flat().find((b) => 'web_app' in b)!;
+    const payload = new URL(launch.web_app.url).searchParams.get('tgWebAppStartParam');
+    expect(miniAppPath(payload)).toBe(`/submit?provider=${providerId}`);
+  });
+  it('asks users to choose when a shared alias identifies several providers', async () => {
+    await storage.db.query("UPDATE providers SET aliases=ARRAY['共同旧名'] WHERE id=$1", [
+      providerId,
+    ]);
+    await storage.db.query(
+      "INSERT INTO providers(name,slug,aliases) VALUES ('另一家机场','another-airport',ARRAY['共同旧名'])",
+    );
+    await text('共同旧名');
+    const keyboard = calls.at(-1)!.payload.reply_markup as InlineKeyboardMarkup;
+    expect(
+      keyboard.inline_keyboard
+        .flat()
+        .filter((b) => 'callback_data' in b && b.callback_data.includes(':pick:')),
+    ).toHaveLength(2);
+    expect(await follows()).toHaveLength(0);
   });
   it('remembers command/card context and requires confirmation before following or unfollowing', async () => {
     await text('/status test-cloud');

@@ -28,12 +28,18 @@ describe('Telegram Mini App navigation', () => {
     expect(miniAppPath(`s_${id.replace(/-/g, '')}`)).toBe(`/console/submissions?id=${id}`);
     expect(miniAppPath(`m_${id.replace(/-/g, '')}`)).toBe(`/console/memorials?id=${id}`);
     expect(miniAppPath('users')).toBe('/console/users');
+    expect(miniAppPath(`report_${id.replace(/-/g, '')}`)).toBe(`/submit?provider=${id}`);
+    expect(miniAppPath('group_100123')).toBe('/groups/-100123');
+    expect(miniAppPath('notification_preferences')).toBe('/me/notifications');
     for (const payload of [
       'https://evil.example',
       '//evil.example',
       '__proto__',
       '/console',
       'p_invalid',
+      'report_invalid',
+      'group_-100123',
+      'group_100123/console',
       null,
     ])
       expect(miniAppPath(payload)).toBeUndefined();
