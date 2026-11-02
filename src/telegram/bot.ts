@@ -47,6 +47,7 @@ import {
 } from './format.js';
 import { views, type View } from './views.js';
 import { commandMenus, commandsFor } from './commands.js';
+import { createConversation } from './conversation.js';
 export { commandMenus } from './commands.js';
 
 export const allowedUpdates: Array<Exclude<keyof Update, 'update_id'>> = [
@@ -277,8 +278,10 @@ export function createBot(db: DB, config: Config, botInfo?: UserFromGetMe) {
     await next();
   });
 
-  registerCatalogHandlers(bot, db, config, v, tools);
+  const conversation = createConversation(db, config, v, tools);
+  registerCatalogHandlers(bot, db, config, v, tools, conversation);
   registerReviewHandlers(bot, db, config, v, tools);
+  conversation.register(bot);
   return bot;
 }
 type Views = ReturnType<typeof views>;
@@ -439,20 +442,27 @@ const submitHelp = [
 ].join('\n');
 function helpText(username: string) {
   return [
-    '<b>Deadstick · 机场观察与赛博墓园</b>',
-    '/search 名称 · /status slug · /graveyard',
-    '/ceremony slug · /tribute slug · /memorial slug 留言',
-    '/follow slug · /unfollow slug · /following',
-    '/app · Mini App　/me · 我的关注与投稿',
-    '/submit（私聊投稿）',
-    `在任意聊天输入 <code>@${escape(username)} 机场名</code> 可直接分享机场卡片。`,
-    '自动检测只会标记“疑似跑路”，确认跑路必须经过人工核验。',
+    '私聊直接发机场名或官网域名，也可以说：',
+    '「某某云还活着吗」「关注某某云」「取消关注」「我来报个信」。',
+    '发「取消」结束当前操作。',
+    '/app 打开页面 · /me 我的关注与投稿 · /graveyard 逛墓园',
+    `群里用 /search 机场名，或输入 <code>@${escape(username)} 机场名</code> 分享卡片。`,
+    '疑似跑路仍待人工核验，花先别买。',
   ].join('\n');
 }
 
-function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: Tools) {
-  const card = async (ctx: Context, p: ProviderView) =>
-    v.provider(p, ctx.me.username, ctx.from ? (await t.me(ctx)).id : undefined);
+function registerCatalogHandlers(
+  bot: Bot,
+  db: DB,
+  config: Config,
+  v: Views,
+  t: Tools,
+  conversation: ReturnType<typeof createConversation>,
+) {
+  const card = async (ctx: Context, p: ProviderView) => {
+    await conversation.remember(ctx, p);
+    return v.provider(p, ctx.me.username, ctx.from ? (await t.me(ctx)).id : undefined);
+  };
   async function welcome(ctx: Context) {
     const privateChat = ctx.chat?.type === 'private';
     const user = await t.me(ctx);
@@ -465,16 +475,16 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
         .catch(ignore400);
     await t.reply(
       ctx,
-      `<b>Deadstick · 机场观察与赛博墓园</b>\n你的 Telegram ID：<code>${ctx.from!.id}</code>`,
+      '<b>Deadstick</b>\n发机场名或官网域名，看看这家还活着没。',
       markup([
         [
-          { text: '🔍 搜索机场', switch_inline_query_current_chat: '' },
-          { text: '🪦 逛墓园', callback_data: 'gy:0' },
+          { text: '查机场', callback_data: 'cv:search' },
+          { text: '逛墓园', callback_data: 'gy:0' },
         ],
-        miniAppButton(config, '📱 打开 Deadstick', 'airports', privateChat),
+        miniAppButton(config, '打开 Deadstick', 'airports', privateChat),
         [
-          ...miniAppButton(config, '📮 投稿', 'submit', privateChat),
-          ...miniAppButton(config, '🔔 我的关注', 'following', privateChat),
+          { text: '我来报个信', callback_data: 'cv:report' },
+          ...miniAppButton(config, '我的关注', 'following', privateChat),
         ],
         reviewer && privateChat
           ? [
@@ -641,8 +651,10 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
     const p = await v.find(ctx.match);
     if (!p) return t.reply(ctx, '用法：<code>/follow slug</code>');
     const follow = ctx.message!.text.split(/[\s@]/)[0] === '/follow';
+    if (ctx.chat.type === 'private')
+      return conversation.target(ctx, follow ? 'follow' : 'unfollow', p);
     await setFollow(db, (await t.me(ctx)).id, p.id, follow);
-    const dm = ctx.chat.type === 'private' ? undefined : t.deepLink(ctx, 'start');
+    const dm = t.deepLink(ctx, 'start');
     await t.reply(
       ctx,
       follow
@@ -732,6 +744,8 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
   bot.callbackQuery(new RegExp(`^(fo|uf):${id}$`), async (ctx) => {
     const p = await provider(ctx);
     const follow = ctx.match[1] === 'fo';
+    if (ctx.chat?.type === 'private')
+      return conversation.target(ctx, follow ? 'follow' : 'unfollow', p);
     const user = await t.me(ctx);
     await setFollow(db, user.id, p.id, follow);
     await t.answer(ctx, follow ? '已关注，状态变化会私信通知你' : '已取消关注');
