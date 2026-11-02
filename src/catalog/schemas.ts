@@ -61,7 +61,11 @@ export const LeadInput = Type.Object(
 export type LeadInput = Static<typeof LeadInput>;
 export const SubmissionReview = Type.Union([
   Type.Object(
-    { approve: Type.Boolean(), reason: Type.String({ minLength: 1, maxLength: 1000 }) },
+    {
+      approve: Type.Boolean(),
+      reason: Type.String({ minLength: 1, maxLength: 1000 }),
+      revision: Type.Optional(Type.Integer({ minimum: 1, maximum: 2147483647 })),
+    },
     { additionalProperties: false },
   ),
   Type.Object(
@@ -72,6 +76,7 @@ export const SubmissionReview = Type.Union([
         Type.Literal('needs_info'),
       ]),
       reason: Type.String({ minLength: 1, maxLength: 1000 }),
+      revision: Type.Optional(Type.Integer({ minimum: 1, maximum: 2147483647 })),
     },
     { additionalProperties: false },
   ),

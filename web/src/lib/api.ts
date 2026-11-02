@@ -78,6 +78,7 @@ const messages: Record<string, string> = {
   NOT_DEAD: '还没入土',
   ALREADY_DEAD: '已经入土',
   ALREADY_REVIEWED: '已经处理过',
+  SUBMISSION_CHANGED: '投稿已更新，请刷新审核后重试',
   INCIDENT_OPEN: '已有未处理的异常',
   MONITOR_DISABLED: '监测已停用或已入土',
   DUPLICATE_ENDPOINT: '地址重复',

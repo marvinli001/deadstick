@@ -39,8 +39,12 @@ describe.skipIf(!connection)('catalog search and submission workflows', () => {
   });
   const post = (url: string, payload: unknown, headers = member) =>
     app.inject({ method: 'POST', url, headers, payload: payload as never });
-  const review = (id: string, action: string, reason = '已核对公开资料') =>
-    post(`/admin/submissions/${id}/review`, { action, reason }, admin);
+  const review = (id: string, action: string, reason = '已核对公开资料', revision?: number) =>
+    post(
+      `/admin/submissions/${id}/review`,
+      { action, reason, ...(revision === undefined ? {} : { revision }) },
+      admin,
+    );
   async function provider(
     name = '白菊机场',
     slug = 'white-cloud',
@@ -305,6 +309,227 @@ describe.skipIf(!connection)('catalog search and submission workflows', () => {
     });
     expect(pending.statusCode, pending.body).toBe(409);
   });
+  function revisionBot() {
+    const bot = createBot(storage.db, config, {
+      id: 123,
+      is_bot: true,
+      first_name: 'Test',
+      username: 'test_bot',
+      can_join_groups: true,
+      can_read_all_group_messages: false,
+      supports_inline_queries: true,
+      can_connect_to_business: false,
+      has_main_web_app: true,
+      has_topics_enabled: false,
+      allows_users_to_create_topics: false,
+      can_manage_bots: false,
+      supports_join_request_queries: false,
+    });
+    const calls: { method: string; payload: Record<string, unknown> }[] = [];
+    bot.api.config.use(async (_prev, method, payload) => {
+      calls.push({ method, payload: payload as Record<string, unknown> });
+      return {
+        ok: true,
+        result: method.startsWith('send')
+          ? { message_id: 1, date: 1, chat: { id: 100, type: 'private' } }
+          : true,
+      } as never;
+    });
+    let updateId = 1;
+    const from = { id: 100, is_bot: false, first_name: 'Reviewer' };
+    const chat = { id: 100, type: 'private', first_name: 'Reviewer' };
+    return {
+      calls,
+      press: (data: string) =>
+        bot.handleUpdate({
+          update_id: updateId++,
+          callback_query: {
+            id: `cb${updateId}`,
+            from,
+            chat_instance: 'test',
+            data,
+            message: { message_id: 1, date: 1, chat, text: 'card' },
+          },
+        } as never),
+      reply: (prompt: string, body = '旧资料不完整') =>
+        bot.handleUpdate({
+          update_id: updateId++,
+          message: {
+            message_id: updateId,
+            date: 1,
+            from,
+            chat,
+            text: body,
+            reply_to_message: {
+              message_id: 1,
+              date: 1,
+              chat,
+              from: { id: 123, is_bot: true, first_name: 'Test' },
+              text: prompt,
+            },
+          },
+        } as never),
+    };
+  }
+  async function supplement(id: string, revision = 1) {
+    const request = await post(
+      `/admin/submissions/${id}/review`,
+      { action: 'needs_info', reason: '请补充资料', ...(revision === 1 ? {} : { revision }) },
+      admin,
+    );
+    expect(request.statusCode, request.body).toBe(200);
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/submissions/${id}`,
+      headers: member,
+      payload: input('补交后的机场'),
+    });
+    expect(response.statusCode, response.body).toBe(200);
+  }
+  const submissionState = async (id: string) =>
+    (await app.inject({ url: `/admin/submissions?id=${id}`, headers: admin })).json().items[0];
+  it.each([{ approve: true }, { action: 'approved' }])(
+    'keeps initial reviews without revision compatible with %j',
+    async (decision) => {
+      const submitted = await post('/submissions', input());
+      const response = await post(
+        `/admin/submissions/${submitted.json().id}/review`,
+        { ...decision, reason: '首次审核通过' },
+        admin,
+      );
+      expect(response.statusCode, response.body).toBe(200);
+    },
+  );
+  it('rejects stale and omitted revisions in both API review shapes, while a current version can be reviewed', async () => {
+    const submitted = await post('/submissions', input());
+    const id = submitted.json().id;
+    await supplement(id);
+    const stalePage = await submissionState(id);
+    expect(stalePage).toMatchObject({ status: 'pending', revision: 2 });
+    for (const decision of [
+      { approve: true },
+      { approve: false },
+      { action: 'approved' },
+      { action: 'rejected' },
+      { action: 'needs_info' },
+    ]) {
+      for (const version of [{}, { revision: 1 }]) {
+        const response = await post(
+          `/admin/submissions/${id}/review`,
+          { ...decision, ...version, reason: '基于旧资料的意见' },
+          admin,
+        );
+        expect(response.statusCode, response.body).toBe(409);
+        expect(response.json().error.message).toContain('刷新审核');
+      }
+    }
+    expect(await submissionState(id)).toMatchObject({ status: 'pending', revision: 2 });
+    expect(await storage.db.query('SELECT id FROM providers')).toHaveLength(0);
+    const response = await post(
+      `/admin/submissions/${id}/review`,
+      { action: 'approved', reason: '看过补交资料', revision: stalePage.revision },
+      admin,
+    );
+    expect(response.statusCode, response.body).toBe(200);
+    expect(await submissionState(id)).toMatchObject({ status: 'approved', revision: 2 });
+  });
+  it('keeps a new revision cached on an earlier page stale after another supplement', async () => {
+    const submitted = await post('/submissions', input());
+    const id = submitted.json().id;
+    await supplement(id);
+    await supplement(id, 2);
+    const stale = await post(
+      `/admin/submissions/${id}/review`,
+      { approve: false, reason: '第二版的旧意见', revision: 2 },
+      admin,
+    );
+    expect(stale.statusCode, stale.body).toBe(409);
+    expect(await submissionState(id)).toMatchObject({ status: 'pending', revision: 3 });
+    const current = await post(
+      `/admin/submissions/${id}/review`,
+      { approve: false, reason: '看过第三版', revision: 3 },
+      admin,
+    );
+    expect(current.statusCode, current.body).toBe(200);
+  });
+  it('encodes the seen revision in reviewer notifications and views, and rejects old approval or rejection buttons', async () => {
+    const submitted = await post('/submissions', input());
+    const id = submitted.json().id;
+    const initialView = await views(storage.db, config).submission(0);
+    expect(JSON.stringify(initialView.markup)).toContain(`sb:a:${id}:1`);
+    expect(JSON.stringify(initialView.markup)).toContain(`sb:r:${id}:1`);
+    await supplement(id);
+    const currentView = await views(storage.db, config).submission(0);
+    expect(JSON.stringify(currentView.markup)).toContain(`sb:a:${id}:2`);
+    const [notice] = await storage.db.query<{ payload: unknown }>(
+      'SELECT payload FROM notifications WHERE dedupe_key=$1',
+      [`submission:${id}:2:100`],
+    );
+    expect(JSON.stringify(notice!.payload)).toContain(`sb:a:${id}:2`);
+    const bot = revisionBot();
+    for (const action of ['a', 'r'])
+      for (const suffix of ['', ':1']) {
+        const start = bot.calls.length;
+        await bot.press(`sb:${action}:${id}${suffix}`);
+        expect(await submissionState(id)).toMatchObject({ status: 'pending', revision: 2 });
+        expect(bot.calls.slice(start)).toContainEqual(
+          expect.objectContaining({
+            method: 'answerCallbackQuery',
+            payload: expect.objectContaining({ text: expect.stringContaining('刷新审核') }),
+          }),
+        );
+        expect(
+          bot.calls
+            .slice(start)
+            .some((call) => call.method === 'sendMessage' && call.payload.reply_markup),
+        ).toBe(false);
+      }
+    await bot.press(`sb:a:${id}:2`);
+    expect(await submissionState(id)).toMatchObject({ status: 'approved', revision: 2 });
+  });
+  it('still accepts a legacy initial approval button', async () => {
+    const submitted = await post('/submissions', input());
+    const id = submitted.json().id;
+    await revisionBot().press(`sb:a:${id}`);
+    expect(await submissionState(id)).toMatchObject({ status: 'approved', revision: 1 });
+  });
+  it('binds force-reply rejection to its original revision, including prompts from legacy buttons', async () => {
+    const submitted = await post('/submissions', input());
+    const id = submitted.json().id;
+    const bot = revisionBot();
+    await bot.press(`sb:r:${id}`);
+    const firstPrompt = String(
+      bot.calls.find((call) => call.method === 'sendMessage')!.payload.text,
+    ).replace(/<[^>]+>/g, '');
+    await supplement(id);
+    for (const prompt of [firstPrompt, `驳回单：${id}`]) {
+      const start = bot.calls.length;
+      await bot.reply(prompt);
+      expect(await submissionState(id)).toMatchObject({ status: 'pending', revision: 2 });
+      expect(JSON.stringify(bot.calls.slice(start))).toContain('刷新审核');
+    }
+    expect(firstPrompt).toContain(`驳回单：${id} 1`);
+    bot.calls.length = 0;
+    await bot.press(`sb:r:${id}:2`);
+    const secondPrompt = String(
+      bot.calls.find((call) => call.method === 'sendMessage')!.payload.text,
+    ).replace(/<[^>]+>/g, '');
+    expect(secondPrompt).toContain(`驳回单：${id} 2`);
+    await supplement(id, 2);
+    await bot.reply(secondPrompt);
+    expect(await submissionState(id)).toMatchObject({ status: 'pending', revision: 3 });
+    bot.calls.length = 0;
+    await bot.press(`sb:r:${id}:3`);
+    const currentPrompt = String(
+      bot.calls.find((call) => call.method === 'sendMessage')!.payload.text,
+    ).replace(/<[^>]+>/g, '');
+    await bot.reply(currentPrompt, '第三版仍需驳回');
+    expect(await submissionState(id)).toMatchObject({
+      status: 'rejected',
+      revision: 3,
+      reason: '第三版仍需驳回',
+    });
+  });
   it('supports needs-info, private owner reads, owner-only supplement, repeated reviews and result notifications', async () => {
     const submitted = await post('/submissions', input());
     const id = submitted.json().id;
@@ -359,7 +584,7 @@ describe.skipIf(!connection)('catalog search and submission workflows', () => {
       payload: { name: '补好资料的机场', endpoints: [{ kind: 'website', url: website }] },
     });
     expect(update.statusCode, update.body).toBe(200);
-    const again = await review(id, 'needs_info', '再补一条');
+    const again = await review(id, 'needs_info', '再补一条', 2);
     expect(again.statusCode, again.body).toBe(200);
     expect(
       (
@@ -371,8 +596,8 @@ describe.skipIf(!connection)('catalog search and submission workflows', () => {
         })
       ).statusCode,
     ).toBe(200);
-    expect((await review(id, 'approved')).statusCode).toBe(200);
-    expect((await review(id, 'approved')).statusCode).toBe(409);
+    expect((await review(id, 'approved', '已核对公开资料', 3)).statusCode).toBe(200);
+    expect((await review(id, 'approved', '已核对公开资料', 3)).statusCode).toBe(409);
     const notices = JSON.stringify(
       await storage.db.query('SELECT dedupe_key,payload FROM notifications'),
     );
@@ -434,7 +659,7 @@ describe.skipIf(!connection)('catalog search and submission workflows', () => {
         })
       ).statusCode,
     ).toBe(200);
-    expect((await review(id, 'approved')).statusCode).toBe(200);
+    expect((await review(id, 'approved', '已核对公开资料', 2)).statusCode).toBe(200);
     expect(
       await storage.db.query(
         "SELECT public_url FROM endpoints WHERE display_host='new-site.example.com'",

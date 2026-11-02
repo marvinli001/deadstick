@@ -288,6 +288,8 @@ export async function reviewSubmission(
     const row = required(
       (await tx.query<Submission>('SELECT * FROM submissions WHERE id=$1 FOR UPDATE', [id]))[0],
     );
+    if (row.revision !== (input.revision ?? 1))
+      throw new AppError(409, 'SUBMISSION_CHANGED', '投稿已更新，请刷新审核后重试。');
     if (row.status !== 'pending')
       throw new AppError(409, 'ALREADY_REVIEWED', 'Submission already reviewed');
     const status = 'action' in input ? input.action : input.approve ? 'approved' : 'rejected';
@@ -316,7 +318,7 @@ export async function reviewSubmission(
       'UPDATE submissions SET status=$1,reason=$2,reviewer_id=$3,provider_id=coalesce($4,provider_id),reviewed_at=now() WHERE id=$5',
       [status, input.reason.trim(), actorId, provider?.id ?? null, id],
     );
-    await audit(tx, actorId, 'submission.review', id, { action: status });
+    await audit(tx, actorId, 'submission.review', id, { action: status, revision: row.revision });
     await notifySubmissionResult(
       tx,
       config,
