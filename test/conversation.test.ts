@@ -307,6 +307,14 @@ describe.skipIf(!connection)('private Bot conversations with PostgreSQL', () => 
       { user_id: '43' },
     ]);
   });
+  it('does not echo or persist paths and tokens from pasted URLs', async () => {
+    await text('https://not-found.example/private/path?token=private-url-token');
+    expect(output()).not.toContain('private-url-token');
+    expect(output()).not.toContain('/private/path');
+    expect(
+      JSON.stringify(await storage.db.query('SELECT state FROM bot_conversations')),
+    ).not.toContain('private-url-token');
+  });
   it('gives review force-replies priority and rechecks reviewer permissions', async () => {
     await text('/start');
     const [incident] = await storage.db.query<{ id: string }>(

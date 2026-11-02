@@ -177,9 +177,7 @@ export function createConversation(
     await save(ctx, { pending: p });
     await display(
       ctx,
-      items.length
-        ? `「${escape(query)}」有几家，选一下。`
-        : `没找到「${escape(query)}」。换个名字或官网域名？`,
+      items.length ? '找到几家，选一下。' : '没找到。换个名字或官网域名？',
       markup([
         ...items.map((item) => [
           {
