@@ -5,6 +5,7 @@ const commandTable: Array<BotCommand & { audience: Audience }> = [
   { command: 'start', description: '开始使用', audience: 'private' },
   { command: 'app', description: '打开 Mini App', audience: 'private' },
   { command: 'me', description: '我的关注与投稿', audience: 'private' },
+  { command: 'cancel', description: '取消当前操作', audience: 'private' },
   { command: 'help', description: '使用说明', audience: 'everyone', is_ephemeral: true },
   { command: 'search', description: '搜索机场：名称', audience: 'everyone', is_ephemeral: true },
   { command: 'status', description: '机场状态：slug', audience: 'everyone', is_ephemeral: true },

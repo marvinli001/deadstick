@@ -173,6 +173,7 @@ export async function cleanup(db: DB, retentionDays: number) {
   await db.query('DELETE FROM sessions WHERE expires_at<now()');
   await db.query('DELETE FROM auth_challenges WHERE expires_at<now()');
   await db.query('DELETE FROM auth_replays WHERE expires_at<now()');
+  await db.query('DELETE FROM bot_conversations WHERE expires_at<now()');
   await db.query(
     "DELETE FROM check_jobs WHERE status IN ('done','failed') AND finished_at<now()-$1*interval '1 day'",
     [retentionDays],
