@@ -2,6 +2,7 @@ import type { DB } from '../db.js';
 import type { Config } from '../config.js';
 import type { InlineKeyboardMarkup } from 'grammy/types';
 import { commandsFor } from './commands.js';
+import { dispatchPolicyNotifications, type NotificationEvent } from './policy-delivery.js';
 import {
   clip,
   compactId,
@@ -23,10 +24,15 @@ export async function enqueue(
   chatId: string,
   payload: object,
   topicId: number | null = null,
-  options: { method?: string; subject?: string; audience?: Audience } = {},
+  options: {
+    method?: string;
+    subject?: string;
+    audience?: Audience;
+    event?: NotificationEvent;
+  } = {},
 ) {
   await db.query(
-    'INSERT INTO notifications(dedupe_key,chat_id,topic_id,payload,method,subject,audience) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING',
+    'INSERT INTO notifications(dedupe_key,chat_id,topic_id,payload,method,subject,audience,event_meta) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING',
     [
       key,
       chatId,
@@ -35,6 +41,7 @@ export async function enqueue(
       options.method ?? 'sendMessage',
       options.subject ?? null,
       options.audience ?? 'public',
+      options.event ? JSON.stringify(options.event) : null,
     ],
   );
 }
@@ -64,6 +71,7 @@ async function broadcast(
   providerId: string,
   key: string,
   message: Outgoing,
+  event: NotificationEvent,
   review?: { subject: string; reply_markup: InlineKeyboardMarkup },
 ) {
   const chats = await db.query<{ id: string; topic_id: number | null; kind: string }>(
@@ -88,6 +96,7 @@ async function broadcast(
         subject: reviewer ? review.subject : undefined,
         method: message.rich ? 'sendRichMessage' : 'sendMessage',
         audience: chat.kind === 'admin' ? 'reviewer' : (chat.kind as Audience),
+        event: chat.kind === 'admin' ? undefined : { ...event, providerId },
       },
     );
   }
@@ -173,6 +182,7 @@ export async function notifyIncidentOpened(
       ),
       reply_markup: markup([detailRow(config, p)]),
     },
+    { type: 'anomaly', incidentId, summary },
     {
       subject: `incident:${incidentId}`,
       reply_markup: reviewKeyboard(incidentId, miniAppLink(config, `i_${compactId(incidentId)}`)),
@@ -181,11 +191,17 @@ export async function notifyIncidentOpened(
 }
 export async function notifyRecovery(db: DB, config: Config, p: ProviderRef, incidentId: string) {
   await clearReviewButtons(db, `incident:${incidentId}`);
-  await broadcast(db, p.id, `recovery:${incidentId}`, {
-    text: `✅ <b>检测恢复</b>\n${headline(p)}\n网站和订阅已通过当前检测，本次异常自动关闭。`,
-    rich: noticeRich('✅ 检测恢复', p, '<p>网站和订阅已通过当前检测，本次异常自动关闭。</p>'),
-    reply_markup: markup([detailRow(config, p)]),
-  });
+  await broadcast(
+    db,
+    p.id,
+    `recovery:${incidentId}`,
+    {
+      text: `✅ <b>检测恢复</b>\n${headline(p)}\n网站和订阅已通过当前检测，本次异常自动关闭。`,
+      rich: noticeRich('✅ 检测恢复', p, '<p>网站和订阅已通过当前检测，本次异常自动关闭。</p>'),
+      reply_markup: markup([detailRow(config, p)]),
+    },
+    { type: 'recovery', incidentId, summary: '网站和订阅已通过当前检测，本次异常自动关闭。' },
+  );
 }
 export async function notifyResolution(
   db: DB,
@@ -206,34 +222,52 @@ export async function notifyResolution(
       ? '✅ <b>管理员排除本次异常</b>'
       : '✅ <b>人工核验：服务恢复</b>';
   const ceremony = startLink(config.botUsername, `c_${compactId(p.id)}`);
-  await broadcast(db, p.id, `resolution:${incidentId}`, {
-    text: `${title}\n${headline(p)}\n<blockquote>${escape(clip(resolution.reason, 1500))}</blockquote>\n${evidence(resolution.evidenceUrls)}`,
-    rich: noticeRich(
-      title.replace(/<[^>]+>/g, ''),
-      p,
-      `<blockquote>${escape(clip(resolution.reason, 1500))}</blockquote><details><summary>核验证据 · ${resolution.evidenceUrls.length} 项</summary><ul>${resolution.evidenceUrls.map((u, i) => `<li><a href="${escape(u)}">证据 ${i + 1}</a></li>`).join('')}</ul></details>`,
-    ),
-    reply_markup: dead
-      ? markup([
-          tributeRow(p.id),
-          [
-            ...(ceremony ? [{ text: '🕯 电子追悼会', url: ceremony }] : []),
-            ...detailRow(config, p, '🌐 墓碑'),
-          ],
-        ])
-      : markup([detailRow(config, p)]),
-  });
+  await broadcast(
+    db,
+    p.id,
+    `resolution:${incidentId}`,
+    {
+      text: `${title}\n${headline(p)}\n<blockquote>${escape(clip(resolution.reason, 1500))}</blockquote>\n${evidence(resolution.evidenceUrls)}`,
+      rich: noticeRich(
+        title.replace(/<[^>]+>/g, ''),
+        p,
+        `<blockquote>${escape(clip(resolution.reason, 1500))}</blockquote><details><summary>核验证据 · ${resolution.evidenceUrls.length} 项</summary><ul>${resolution.evidenceUrls.map((u, i) => `<li><a href="${escape(u)}">证据 ${i + 1}</a></li>`).join('')}</ul></details>`,
+      ),
+      reply_markup: dead
+        ? markup([
+            tributeRow(p.id),
+            [
+              ...(ceremony ? [{ text: '🕯 电子追悼会', url: ceremony }] : []),
+              ...detailRow(config, p, '🌐 墓碑'),
+            ],
+          ])
+        : markup([detailRow(config, p)]),
+    },
+    {
+      type: dead ? 'dead' : resolution.action === 'dismissed' ? 'dismissed' : 'recovery',
+      incidentId,
+      summary: resolution.reason,
+      evidenceUrls: resolution.evidenceUrls,
+      manual: true,
+    },
+  );
 }
 export async function notifyRevival(db: DB, config: Config, p: ProviderRef, reason: string) {
-  await broadcast(db, p.id, `revival:${p.id}:${Date.now()}`, {
-    text: `🌱 <b>墓碑复活</b>\n${headline(p)}\n经人工核验仍在运营，已移出墓园并重新开始监测。\n<blockquote>${escape(clip(reason, 1500))}</blockquote>`,
-    rich: noticeRich(
-      '🌱 墓碑复活',
-      p,
-      `<p>经人工核验仍在运营，已移出墓园并重新开始监测。</p><blockquote>${escape(clip(reason, 1500))}</blockquote>`,
-    ),
-    reply_markup: markup([detailRow(config, p)]),
-  });
+  await broadcast(
+    db,
+    p.id,
+    `revival:${p.id}:${Date.now()}`,
+    {
+      text: `🌱 <b>墓碑复活</b>\n${headline(p)}\n经人工核验仍在运营，已移出墓园并重新开始监测。\n<blockquote>${escape(clip(reason, 1500))}</blockquote>`,
+      rich: noticeRich(
+        '🌱 墓碑复活',
+        p,
+        `<p>经人工核验仍在运营，已移出墓园并重新开始监测。</p><blockquote>${escape(clip(reason, 1500))}</blockquote>`,
+      ),
+      reply_markup: markup([detailRow(config, p)]),
+    },
+    { type: 'revival', summary: reason, manual: true },
+  );
 }
 export async function notifySubmission(
   db: DB,
@@ -373,6 +407,7 @@ export async function dispatchNotifications(db: DB, sender: TelegramSender, limi
   await db.query(
     "UPDATE notifications SET status='failed',error_code='RETRIES_EXHAUSTED' WHERE attempts>=8 AND (status='pending' OR status='running' AND lease_until<now())",
   );
+  const policyCount = await dispatchPolicyNotifications(db, sender, limit);
   const rows = await db.query<{
     id: string;
     chat_id: string;
@@ -384,7 +419,7 @@ export async function dispatchNotifications(db: DB, sender: TelegramSender, limi
     audience: Audience;
     subject: string | null;
   }>(
-    `WITH picked AS (SELECT id FROM notifications WHERE attempts<8 AND available_at<=now() AND (status='pending' OR status='running' AND lease_until<now()) ORDER BY available_at FOR UPDATE SKIP LOCKED LIMIT $1) UPDATE notifications n SET status='running',attempts=attempts+1,lease_token=gen_random_uuid(),lease_until=now()+interval '5 minutes' FROM picked WHERE n.id=picked.id RETURNING n.*`,
+    `WITH picked AS (SELECT id FROM notifications WHERE event_meta IS NULL AND attempts<8 AND available_at<=now() AND (status='pending' OR status='running' AND lease_until<now()) ORDER BY available_at FOR UPDATE SKIP LOCKED LIMIT $1) UPDATE notifications n SET status='running',attempts=attempts+1,lease_token=gen_random_uuid(),lease_until=now()+interval '5 minutes' FROM picked WHERE n.id=picked.id RETURNING n.*`,
     [limit],
   );
   // Sequential delivery keeps each worker comfortably below Telegram's global rate limit.
@@ -459,5 +494,5 @@ export async function dispatchNotifications(db: DB, sender: TelegramSender, limi
       );
     }
   }
-  return rows.length;
+  return rows.length + policyCount;
 }

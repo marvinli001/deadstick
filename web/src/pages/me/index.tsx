@@ -25,6 +25,7 @@ const tabs = [
   { to: '/me/follows', label: '关注' },
   { to: '/me/submissions', label: '投稿' },
   { to: '/me/security', label: '安全' },
+  { to: '/me/notifications', label: '通知' },
 ];
 
 function useUser() {

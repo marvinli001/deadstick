@@ -28,6 +28,7 @@ const commandTable: Array<BotCommand & { audience: Audience }> = [
   { command: 'review', description: '文字复核：事件ID 结论 证据 原因', audience: 'reviewer' },
   { command: 'bind', description: '把本群（话题）设为通报群', audience: 'groupAdmin' },
   { command: 'unbind', description: '取消本群通报', audience: 'groupAdmin' },
+  { command: 'groupsetup', description: '本群查询与通知设置', audience: 'groupAdmin' },
 ];
 const pick = (audiences: Audience[], ephemeral: boolean): BotCommand[] =>
   commandTable

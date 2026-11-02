@@ -1345,7 +1345,7 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       topic_id: 12,
       enabled: true,
     });
-    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(2);
+    expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(3);
   });
   it('keeps rich group navigation in the same topic and updates personal overlays without editing public cards', async () => {
     const p = await provider();
@@ -1415,7 +1415,7 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       show_alert: true,
     });
   });
-  it('requires both application and group administrator rights to bind from commands or old invitation buttons', async () => {
+  it('requires current group administrator rights to bind from commands or old invitation buttons', async () => {
     const { bot, calls } = testBot();
     bot.api.config.use(async (prev, method, payload, signal) =>
       method === 'getChatAdministrators'
@@ -1492,6 +1492,9 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
     await storage.db.query(
       "INSERT INTO telegram_chats(id,title,kind,topic_id) VALUES ('100','Admin','admin',NULL),('-100123','Group','group',12)",
     );
+    await storage.db.query(
+      `UPDATE telegram_chats SET notification_policy='{"enabled":true}' WHERE kind='group'`,
+    );
     await check(p.id, false);
     await check(p.id, false);
     const [incident] = await storage.db.query<{ id: string }>('SELECT id FROM incidents');
@@ -1506,12 +1509,21 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       },
       adminId,
     );
-    sender.send.mockResolvedValue({ message_id: 55 });
+    sender.send.mockImplementation(async (method: string) =>
+      method === 'getMe'
+        ? { id: 123 }
+        : method === 'getChatMember'
+          ? { status: 'member' }
+          : { message_id: 55 },
+    );
+    await dispatchNotifications(storage.db, sender);
     await dispatchNotifications(storage.db, sender);
     expect(sender.send.mock.calls.filter(([method]) => method === 'sendRichMessage')).toHaveLength(
       4,
     );
-    const forum = sender.send.mock.calls.filter(([, payload]) => payload.chat_id === '-100123');
+    const forum = sender.send.mock.calls.filter(
+      ([method, payload]) => method.startsWith('send') && payload.chat_id === '-100123',
+    );
     for (const [, payload] of forum) expect(payload.message_thread_id).toBe(12);
     const reviewerOld = sender.send.mock.calls.find(
       ([, payload]) =>

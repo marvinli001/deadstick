@@ -56,6 +56,9 @@ export function miniAppPath(payload: string | null): string | undefined {
   };
   if (!payload) return undefined;
   if (Object.hasOwn(paths, payload)) return paths[payload];
+  const group = /^group_([0-9]{1,20})$/.exec(payload);
+  if (group) return `/groups/-${group[1]}`;
+  if (payload === 'notification_preferences') return '/me/notifications';
   const search = /^search_([A-Za-z0-9_-]{1,480})$/.exec(payload);
   if (search) {
     try {
