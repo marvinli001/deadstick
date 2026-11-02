@@ -1,3 +1,4 @@
+import { safeSearchTerm } from './submissionDraft';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import type {
@@ -34,7 +35,10 @@ export interface ProviderFilter {
 export const useProviders = (filter: ProviderFilter, enabled = true) =>
   useQuery({
     queryKey: ['providers', filter],
-    queryFn: () => api<Page<Provider>>('/providers', { query: { ...filter } }),
+    queryFn: () =>
+      api<Page<Provider>>('/providers', {
+        query: { ...filter, q: filter.q ? safeSearchTerm(filter.q) : undefined },
+      }),
     placeholderData: keepPreviousData,
     enabled,
   });

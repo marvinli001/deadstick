@@ -1,3 +1,4 @@
+import { safeSearchTerm } from './submissionDraft.js';
 interface TelegramWebApp {
   initData: string;
   version: string;
@@ -61,12 +62,16 @@ export function miniAppPath(payload: string | null): string | undefined {
       const bytes = Uint8Array.from(atob(search[1]!.replace(/-/g, '+').replace(/_/g, '/')), (c) =>
         c.charCodeAt(0),
       );
-      const query = new TextDecoder('utf-8', { fatal: true }).decode(bytes).slice(0, 120);
+      const query = safeSearchTerm(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
       return `/airports?q=${encodeURIComponent(query)}`;
     } catch {
       return undefined;
     }
   }
+  const report = /^report_([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$/.exec(
+    payload,
+  );
+  if (report) return `/submit?provider=${report.slice(1).join('-')}`;
   const match =
     /^([pism])_([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$/.exec(payload);
   if (!match) return undefined;

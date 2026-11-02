@@ -23,6 +23,7 @@ export interface ProviderFormInitial {
   slug: string;
   description: string;
   tags: string[];
+  aliases?: string[];
   websites: { url: string; label: string }[];
   /** Subscription URLs are stored encrypted, so editing shows only their hosts and asks for them again. */
   subscriptionHosts: string[];
@@ -79,6 +80,7 @@ export function ProviderForm({
   const [slugTouched, setSlugTouched] = useState(Boolean(initial));
   const [description, setDescription] = useState(initial?.description ?? '');
   const [tags, setTags] = useState<string[]>(initial?.tags ?? []);
+  const [aliases, setAliases] = useState<string[]>(initial?.aliases ?? []);
   const [rows, setRows] = useState<Row[]>(() => initialRows(initial));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -110,6 +112,7 @@ export function ProviderForm({
         slug,
         description: description.trim() || undefined,
         tags: tags.length ? tags : undefined,
+        aliases,
         endpoints,
       });
     } catch (err) {
@@ -201,6 +204,11 @@ export function ProviderForm({
           }}
         />
       </div>
+      <TagInput
+        label="别名 / 旧名"
+        value={aliases}
+        onValueChange={(next) => setAliases(next.slice(0, 20))}
+      />
       <Textarea
         label="简介"
         rows={3}

@@ -11,6 +11,7 @@ import { useDebounced } from '@/components/AirportSearch';
 import { HealthMark, LifecycleMark } from '@/components/marks';
 import { ProviderForm } from '@/components/ProviderForm';
 import { ErrorView, Loading } from '@/components/states';
+import { safeSearchTerm } from '@/lib/submissionDraft';
 import { api, errorText } from '@/lib/api';
 import { ago } from '@/lib/format';
 import type { AdminProvider, Lifecycle, Page } from '@/lib/types';
@@ -50,7 +51,7 @@ export default function Providers() {
   const client = useQueryClient();
   const { toast } = useToastStack();
   const [q, setQ] = useState('');
-  const term = useDebounced(q.trim());
+  const term = useDebounced(safeSearchTerm(q));
   const [lifecycle, setLifecycle] = useState<LifecycleFilter>('all');
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<{ id: string; name: string } | null>(null);

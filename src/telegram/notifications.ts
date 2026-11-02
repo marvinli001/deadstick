@@ -245,30 +245,57 @@ export async function notifySubmission(
     hosts: string[];
     subscriptions: number;
     author: string;
+    revision?: number;
+    kind?: string;
   },
 ) {
-  await notifyReviewers(db, `submission:${submission.id}`, `submission:${submission.id}`, {
-    rich: `<h2>📮 新投稿待审核</h2><p><b>${escape(submission.name)}</b> · <code>${escape(submission.slug)}</code></p><table bordered compact><tr><th>官网</th><td>${escape(clip(submission.hosts.join('、') || '—', 1500))}</td></tr><tr><th>订阅</th><td>${submission.subscriptions} 个 · 加密保存</td></tr><tr><th>投稿人</th><td>${escape(submission.author)}</td></tr></table>`,
-    text: [
-      '📮 <b>新投稿待审核</b>',
-      `${escape(submission.name)} · <code>${escape(submission.slug)}</code>`,
-      `官网：${escape(submission.hosts.join('、') || '—')}`,
-      `订阅：${submission.subscriptions} 个（加密保存，不在消息中显示）`,
-      `投稿人：${escape(submission.author)}`,
-    ].join('\n'),
-    reply_markup: markup([
-      [
-        { text: '✅ 通过', callback_data: `sb:a:${submission.id}`, style: 'success' },
-        { text: '❌ 驳回', callback_data: `sb:r:${submission.id}`, style: 'danger' },
-      ],
-      miniAppButton(config, '🗂 打开审核台', `s_${compactId(submission.id)}`),
-    ]),
-  });
+  await notifyReviewers(
+    db,
+    `submission:${submission.id}:${submission.revision ?? 1}`,
+    `submission:${submission.id}`,
+    {
+      rich: `<h2>📮 新投稿待审核</h2><p><b>${escape(submission.name)}</b> · <code>${escape(submission.slug)}</code></p><table bordered compact><tr><th>官网</th><td>${escape(clip(submission.hosts.join('、') || '—', 1500))}</td></tr><tr><th>订阅</th><td>${submission.subscriptions} 个 · 加密保存</td></tr><tr><th>投稿人</th><td>${escape(submission.author)}</td></tr></table>`,
+      text: [
+        submission.kind ? '<b>新线索待审核</b>' : '<b>新投稿待审核</b>',
+        `${escape(submission.name)} · <code>${escape(submission.slug)}</code>`,
+        `官网：${escape(submission.hosts.join('、') || '—')}`,
+        `订阅：${submission.subscriptions} 个（加密保存，不在消息中显示）`,
+        `投稿人：${escape(submission.author)}`,
+      ].join('\n'),
+      reply_markup: markup([
+        ...(submission.kind
+          ? []
+          : [
+              [
+                {
+                  text: '✅ 通过',
+                  callback_data: `sb:a:${submission.id}`,
+                  style: 'success' as const,
+                },
+                {
+                  text: '❌ 驳回',
+                  callback_data: `sb:r:${submission.id}`,
+                  style: 'danger' as const,
+                },
+              ],
+            ]),
+        miniAppButton(config, '🗂 打开审核台', `s_${compactId(submission.id)}`),
+      ]),
+    },
+  );
 }
 export async function notifySubmissionResult(
   db: DB,
   config: Config,
-  submission: { id: string; userId: string; name: string; approved: boolean; reason: string },
+  submission: {
+    id: string;
+    userId: string;
+    name: string;
+    approved: boolean;
+    reason: string;
+    status?: string;
+    revision?: number;
+  },
   provider?: ProviderRef,
 ) {
   await clearReviewButtons(db, `submission:${submission.id}`);
@@ -279,12 +306,17 @@ export async function notifySubmissionResult(
   if (!user) return;
   await enqueue(
     db,
-    `submission-result:${submission.id}`,
+    `submission-result:${submission.id}:${submission.revision ?? 1}:${submission.status ?? (submission.approved ? 'approved' : 'rejected')}`,
     user.telegram_id,
     html({
-      text: `${submission.approved ? '✅ <b>投稿已通过</b>' : '❌ <b>投稿未通过</b>'}\n${escape(submission.name)}\n<blockquote>${escape(clip(submission.reason, 1000))}</blockquote>`,
-      rich: `<h2>${submission.approved ? '✅ 投稿已通过' : '❌ 投稿未通过'}</h2><p>${escape(submission.name)}</p><blockquote>${escape(clip(submission.reason, 1000))}</blockquote>`,
-      reply_markup: provider ? markup([detailRow(config, provider)]) : undefined,
+      text: `${submission.status === 'needs_info' ? '<b>投稿待补充</b>' : submission.approved ? '<b>投稿已通过</b>' : '<b>投稿未通过</b>'}\n${escape(submission.name)}\n<blockquote>${escape(clip(submission.reason, 1000))}</blockquote>`,
+      rich: `<h2>${submission.status === 'needs_info' ? '投稿待补充' : submission.approved ? '投稿已通过' : '投稿未通过'}</h2><p>${escape(submission.name)}</p><blockquote>${escape(clip(submission.reason, 1000))}</blockquote>`,
+      reply_markup:
+        submission.status === 'needs_info'
+          ? markup([miniAppButton(config, '补交资料', 'submissions', true)])
+          : provider
+            ? markup([detailRow(config, provider)])
+            : undefined,
     }),
     null,
     { method: 'sendRichMessage', audience: 'follower' },

@@ -207,6 +207,7 @@ function ObituaryView({ provider, slug }: { provider: ProviderDetail; slug: stri
         {provider.epitaph && <p className={styles.epitaph}>{provider.epitaph}</p>}
         <Tributes provider={provider} slug={slug} />
         <FollowButton provider={provider} slug={slug} />
+        <Link to={`/submit?provider=${provider.id}`}>补充线索</Link>
       </header>
       {cause && (
         <section className={styles.section}>
@@ -247,6 +248,7 @@ function StatusView({ provider, slug }: { provider: ProviderDetail; slug: string
           <span className={`${styles.slug} mono`}>{provider.slug}</span>
         </div>
         <FollowButton provider={provider} slug={slug} />
+        <Link to={`/submit?provider=${provider.id}`}>补充线索</Link>
       </header>
       <dl className={styles.facts}>
         <div>

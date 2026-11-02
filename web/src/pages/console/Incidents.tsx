@@ -174,6 +174,11 @@ export default function Incidents() {
               <div className={styles.cardBody}>
                 <p className={styles.quote}>{i.summary}</p>
                 {i.resolution && <p>{i.resolution}</p>}
+                {i.leads.map((lead) => (
+                  <p key={lead.id}>
+                    <Link to={`/console/submissions?id=${lead.id}`}>查看补充线索</Link>
+                  </p>
+                ))}
                 {i.evidence_urls.length > 0 && (
                   <p className={styles.links}>
                     {i.evidence_urls.map((url) => (

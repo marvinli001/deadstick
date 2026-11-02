@@ -101,7 +101,13 @@ export function MeSubmissions() {
           )}
           <span className={`${styles.meta} mono`}>{day(s.created_at)}</span>
           <StatusTag value={s.status} />
+          {s.kind !== 'provider' && <span className={styles.meta}>线索</span>}
           {s.reason && <p className={styles.reason}>{s.reason}</p>}
+          {s.status === 'needs_info' && (
+            <Link className={styles.textLink} to={`/submit?submission=${s.id}`}>
+              补交资料
+            </Link>
+          )}
         </li>
       ))}
     </ul>
