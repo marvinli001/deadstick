@@ -1,4 +1,5 @@
 import { useRef, useState, type FormEvent } from 'react';
+import { Link } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Eye, RotateCw, Send } from 'lucide-react';
 import { Alert } from '@/components/arc/alert/alert';
@@ -137,6 +138,7 @@ function Chats() {
                 <span className={styles.mono}>{c.topic_id ? `${c.id} #${c.topic_id}` : c.id}</span>
               </span>
               <span className={styles.meta}>{kinds.find((k) => k.value === c.kind)?.label}</span>
+              {c.kind === 'group' && <Link to={`/groups/${c.id}`}>群设置</Link>}
               <Switch
                 aria-label={`启用 ${c.title}`}
                 checked={c.enabled}

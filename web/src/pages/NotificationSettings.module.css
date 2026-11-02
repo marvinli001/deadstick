@@ -1,0 +1,79 @@
+.page {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 32px 20px 64px;
+}
+.events [role='checkbox'],
+.events [role='checkbox'] span {
+  border-radius: 0;
+}
+.head {
+  border-bottom: 3px solid var(--ink);
+  margin-bottom: 28px;
+  padding-bottom: 18px;
+}
+.head h1 {
+  font-size: clamp(28px, 6vw, 42px);
+  overflow-wrap: anywhere;
+}
+.form,
+.field {
+  display: grid;
+  gap: 20px;
+  max-width: 560px;
+}
+.presets,
+.actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.events {
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--rule);
+  display: grid;
+  gap: 14px;
+}
+.events legend {
+  padding: 0 6px;
+}
+.options {
+  display: grid;
+  gap: 14px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.details {
+  border-block: 1px solid var(--rule);
+  padding: 16px 0;
+}
+.details summary {
+  cursor: pointer;
+}
+.details > div {
+  margin-top: 20px;
+}
+.preview {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 18px;
+  border: 1px solid var(--ink);
+  border-left: 4px solid var(--chry);
+  font-family: var(--font-body);
+}
+.error {
+  color: var(--danger);
+}
+@media (max-width: 480px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}

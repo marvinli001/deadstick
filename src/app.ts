@@ -19,6 +19,7 @@ import { adminRoutes } from './routes/admin.js';
 import { telegramRoutes } from './telegram/routes.js';
 import { telegramSender, TelegramError, type TelegramSender } from './telegram/notifications.js';
 import { telegramConfig } from './telegram/settings.js';
+import { groupSettingsRoutes } from './telegram/group-settings.js';
 
 const staticPath = /^\/(?:(?:assets|fonts)\/|favicon\.svg(?:\?|$))/;
 
@@ -168,6 +169,7 @@ export async function buildApp(
   catalogRoutes(app, db, config);
   adminRoutes(app, db, config, sender);
   telegramRoutes(app, db, config, sender);
+  groupSettingsRoutes(app, db, sender);
   app.get('/openapi.json', { schema: { hide: true } }, async () => app.swagger());
   if (existsSync(join(config.webDist, 'index.html'))) {
     await app.register(fastifyStatic, {

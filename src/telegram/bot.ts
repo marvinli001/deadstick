@@ -232,14 +232,14 @@ export function createBot(db: DB, config: Config, botInfo?: UserFromGetMe) {
       next = String(ctx.message.migrate_to_chat_id);
     await db.transaction(async (tx) => {
       await tx.query(
-        "INSERT INTO telegram_chats(id,title,kind,topic_id,enabled) SELECT $1,title,kind,NULL,enabled FROM telegram_chats WHERE id=$2 AND kind='group' ON CONFLICT(id) DO NOTHING",
+        "INSERT INTO telegram_chats(id,title,kind,topic_id,enabled,query_enabled,notification_policy,manager_telegram_id) SELECT $1,title,kind,NULL,enabled,query_enabled,notification_policy,manager_telegram_id FROM telegram_chats WHERE id=$2 AND kind='group' ON CONFLICT(id) DO NOTHING",
         [next, previous],
       );
       await tx.query("DELETE FROM telegram_chats WHERE id=$1 AND kind='group'", [previous]);
-      await tx.query("UPDATE notifications SET chat_id=$1 WHERE chat_id=$2 AND status='pending'", [
-        next,
-        previous,
-      ]);
+      await tx.query(
+        "UPDATE notifications SET chat_id=$1,topic_id=NULL WHERE chat_id=$2 AND status IN ('pending','running')",
+        [next, previous],
+      );
       await audit(tx, null, 'telegram.migrate', previous, { chatId: next });
     });
   });
@@ -262,14 +262,14 @@ export function createBot(db: DB, config: Config, botInfo?: UserFromGetMe) {
   });
 
   const tools: Tools = { me, reply, show, answer, deepLink, staff };
-  registerSetupHandlers(bot, db, tools);
+  registerSetupHandlers(bot, db, config, tools);
   registerGuestMode(bot, config, v);
 
   // Group whitelist: everything below only runs in private chats and bound groups.
   bot.use(async (ctx, next) => {
     if (isGroupChat(ctx.chat?.type)) {
       const [allowed] = await db.query(
-        "SELECT id FROM telegram_chats WHERE id=$1 AND kind='group' AND enabled",
+        "SELECT id FROM telegram_chats WHERE id=$1 AND kind='group' AND enabled AND query_enabled",
         [String(ctx.chat!.id)],
       );
       if (!allowed) return;
@@ -295,7 +295,7 @@ interface Tools {
 }
 
 /** Chat lifecycle and binding. Runs before the group whitelist so unbound groups can be set up. */
-function registerSetupHandlers(bot: Bot, db: DB, t: Tools) {
+function registerSetupHandlers(bot: Bot, db: DB, config: Config, t: Tools) {
   async function groupAdmin(ctx: Context, chatId: number | string) {
     const members = await ctx.api.getChatAdministrators(chatId);
     return members.some((member) => member.user.id === ctx.from!.id);
@@ -319,7 +319,12 @@ function registerSetupHandlers(bot: Bot, db: DB, t: Tools) {
       });
       return;
     }
-    if (bound || !gone.includes(old_chat_member.status)) return;
+    if (bound?.enabled || !gone.includes(old_chat_member.status)) return;
+    await t.reply(
+      ctx,
+      '本群管理员可用 /groupsetup 配置查询和通知。',
+      markup([miniAppButton(config, '本群设置', `group_${id.slice(1)}`)]),
+    );
     await notifyAdmins(db, `chat-added:${id}:${ctx.update.update_id}`, {
       text: `➕ <b>机器人被加入新群</b>\n${title} · <code>${id}</code>\n邀请人：${escape(from.first_name)}\n绑定前不会响应群命令，也不会收到通报。`,
       reply_markup: markup([
@@ -328,12 +333,11 @@ function registerSetupHandlers(bot: Bot, db: DB, t: Tools) {
     });
   });
   bot.callbackQuery(/^bind:(-?\d{1,20})$/, async (ctx) => {
-    const admin = await t.staff(ctx, ['admin']);
-    if (!admin) return void (await t.answer(ctx, '只有管理员可以绑定群', true));
     const chat = await ctx.api.getChat(ctx.match[1]!);
     if (!isGroupChat(chat.type)) return void (await t.answer(ctx, '这不是群组', true));
     if (!(await groupAdmin(ctx, chat.id)))
       return void (await t.answer(ctx, '还需要该群的管理员权限', true));
+    const admin = await t.me(ctx);
     await bindGroup(db, admin.id, String(chat.id), chat.title ?? String(chat.id), null);
     await ctx
       .editMessageReplyMarkup({
@@ -342,16 +346,24 @@ function registerSetupHandlers(bot: Bot, db: DB, t: Tools) {
       .catch(ignore400);
     await t.answer(ctx, '已绑定');
   });
-  bot.command(['bind', 'unbind'], async (ctx) => {
+  bot.command(['bind', 'unbind', 'groupsetup'], async (ctx) => {
     if (!isGroupChat(ctx.chat.type))
       return void (await t.reply(ctx, '请在要绑定的群里发送此命令。'));
-    const admin = await t.staff(ctx, ['admin']);
-    if (!admin) return void (await t.reply(ctx, '只有 Deadstick 管理员可以设置通报群。'));
     if (!(await groupAdmin(ctx, ctx.chat.id)))
       return void (await t.reply(ctx, '还需要本群的管理员权限。'));
+    const admin = await t.me(ctx);
     const id = String(ctx.chat.id);
+    if (ctx.message!.text.split(/[\s@]/)[0] === '/groupsetup')
+      return void (await t.reply(
+        ctx,
+        '本群设置',
+        markup([miniAppButton(config, '配置本群', `group_${id.slice(1)}`)]),
+      ));
     if (ctx.message!.text.split(/[\s@]/)[0] === '/unbind') {
-      await db.query("DELETE FROM telegram_chats WHERE id=$1 AND kind='group'", [id]);
+      await db.query(
+        "UPDATE telegram_chats SET enabled=false,query_enabled=false,notification_policy=jsonb_set(notification_policy,'{enabled}','false') WHERE id=$1 AND kind='group'",
+        [id],
+      );
       await audit(db, admin.id, 'telegram.unbind', id);
       return void (await t.reply(ctx, '已取消本群通报，机器人不再响应本群命令。'));
     }
@@ -359,7 +371,8 @@ function registerSetupHandlers(bot: Bot, db: DB, t: Tools) {
     await bindGroup(db, admin.id, id, ('title' in ctx.chat && ctx.chat.title) || id, topic);
     await t.reply(
       ctx,
-      `📣 已绑定为通报群${topic ? `，通报发到当前话题（<code>${topic}</code>）` : ''}。\n群 ID：<code>${id}</code>`,
+      '已启用本群查询。通知开关和范围在本群设置里选择。',
+      markup([miniAppButton(config, '本群设置', `group_${id.slice(1)}`)]),
     );
   });
 }
@@ -372,8 +385,8 @@ async function bindGroup(
 ) {
   await db.transaction(async (tx) => {
     await tx.query(
-      "INSERT INTO telegram_chats(id,title,kind,topic_id,enabled) VALUES ($1,$2,'group',$3,true) ON CONFLICT(id) DO UPDATE SET title=excluded.title,kind='group',topic_id=excluded.topic_id,enabled=true",
-      [id, title.slice(0, 255), topicId],
+      "INSERT INTO telegram_chats(id,title,kind,topic_id,enabled,manager_telegram_id) VALUES ($1,$2,'group',$3,true,(SELECT telegram_id FROM users WHERE id=$4)) ON CONFLICT(id) DO UPDATE SET title=excluded.title,kind='group',topic_id=excluded.topic_id,enabled=true,query_enabled=true,manager_telegram_id=excluded.manager_telegram_id",
+      [id, title.slice(0, 255), topicId, actorId],
     );
     await audit(tx, actorId, 'telegram.bind', id, { kind: 'group', topicId, via: 'bot' });
   });

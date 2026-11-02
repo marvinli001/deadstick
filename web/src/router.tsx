@@ -9,6 +9,7 @@ import Cemetery from '@/pages/Cemetery';
 import Airports from '@/pages/Airports';
 import Airport from '@/pages/Airport';
 import Submit from '@/pages/Submit';
+import { GroupSettings, PersonalNotificationSettings } from '@/pages/NotificationSettings';
 import { Login, Register } from '@/pages/Auth';
 import NotFound from '@/pages/NotFound';
 import { MeLayout, MeProfile, MeFollows, MeSubmissions, MeSecurity } from '@/pages/me';
@@ -39,6 +40,14 @@ export const router = createBrowserRouter([
       { path: '/airports', element: <Airports /> },
       { path: '/airports/:slug', element: <Airport /> },
       { path: '/submit', element: <Submit /> },
+      {
+        path: '/groups/:chatId',
+        element: (
+          <RequireUser>
+            <GroupSettings />
+          </RequireUser>
+        ),
+      },
       { path: '/login', element: <Login /> },
       { path: '/register', element: <Register /> },
       {
@@ -53,6 +62,7 @@ export const router = createBrowserRouter([
           { path: 'follows', element: <MeFollows /> },
           { path: 'submissions', element: <MeSubmissions /> },
           { path: 'security', element: <MeSecurity /> },
+          { path: 'notifications', element: <PersonalNotificationSettings /> },
         ],
       },
       { path: '*', element: <NotFound /> },
