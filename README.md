@@ -106,7 +106,7 @@ OIDC 登录流程：`GET /auth/telegram/start?next=/console` 获得授权 URL �
 
 分页使用 `limit`（1–100）和 `offset`。`GET /providers` 还支持 `q`、`tag`、`lifecycle=active|suspected|dead`；搜索匹配名称、标识、别名和公开官网域名，按精确、前缀、包含排序，URL 查询先剥离路径和参数。异常响应为 `{ "error": { "code": "...", "message": "..." }, "requestId": "..." }`。
 
-`POST /submissions` 的 `slug` 可省略，由服务端生成。`POST /submissions/check` 接收 `{ name, website? }`，只返回公开候选；`GET/PUT /submissions/:id` 仅限本人，只有 `needs_info` 可补交，未重新填写订阅时保留原加密订阅。已有机场线索接收 `{ kind: website|abnormal|evidence|review, body, website?, evidenceUrls? }`，内容仅本人和审核员可见。审核接口支持 `{ action: approved|rejected|needs_info, reason }`，兼容原 `{ approve, reason }`；批准线索关联人工复核，不直接确认跑路。机场资料新增 `aliases`，旧管理员更新请求省略时保留原别名。
+`POST /submissions` 的 `slug` 可省略，由服务端生成。`POST /submissions/check` 接收 `{ name, website? }`，只返回公开候选；`GET/PUT /submissions/:id` 仅限本人，只有 `needs_info` 可补交，未重新填写订阅时保留原加密订阅。已有机场线索接收 `{ kind: website|abnormal|evidence|review, body, website?, evidenceUrls? }`，内容仅本人和审核员可见。审核接口支持 `{ action: approved|rejected|needs_info, reason, revision }`，`revision` 必须对应审核员已查看的版本；版本变化返回 `409`，需要重新打开资料。原 `{ approve, reason }` 仍兼容初始版本，补交后须携带当前 `revision`。批准线索关联人工复核，不直接确认跑路。机场资料新增 `aliases`，旧管理员更新请求省略时保留原别名。
 
 群设置接口每次校验当前本群管理员或站内管理员身份；群 ID 和 Mini App 链接不构成授权。策略字段以 `/docs` 为准，查询开关与主动通知开关独立。个人通知偏好仅作用于本人的关注通知，不影响审核待办私信开关。
 

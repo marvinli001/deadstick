@@ -91,10 +91,15 @@ export async function resolveIncident(
     );
     const provider = required(
       (
-        await tx.query<{ id: string; name: string; slug: string }>(
-          'SELECT id,name,slug FROM providers WHERE id=$1 FOR UPDATE',
-          [reference.provider_id],
-        )
+        await tx.query<{
+          id: string;
+          name: string;
+          slug: string;
+          lifecycle: string;
+          epitaph: string | null;
+        }>('SELECT id,name,slug,lifecycle,epitaph FROM providers WHERE id=$1 FOR UPDATE', [
+          reference.provider_id,
+        ])
       )[0],
     );
     const incident = required(
@@ -108,6 +113,7 @@ export async function resolveIncident(
     if (incident.status !== 'open')
       throw new AppError(409, 'ALREADY_REVIEWED', 'Incident already reviewed');
     const dead = resolution.action === 'dead';
+    const reviving = provider.lifecycle === 'dead' && resolution.action === 'recovered';
     const status = dead
       ? 'confirmed_dead'
       : resolution.action === 'dismissed'
@@ -117,20 +123,26 @@ export async function resolveIncident(
       'UPDATE incidents SET status=$1,resolution=$2,evidence_urls=$3,reviewer_id=$4,resolved_at=now() WHERE id=$5',
       [status, resolution.reason, resolution.evidenceUrls, actorId, id],
     );
-    await tx.query(
-      `UPDATE providers SET lifecycle=$1,death_at=CASE WHEN $2 THEN now() ELSE NULL END,epitaph=$3,failure_streak=0,config_version=config_version+1,next_check_at=now(),updated_at=now() WHERE id=$4`,
-      [
-        dead ? 'dead' : 'active',
-        dead,
-        dead ? (resolution.epitaph ?? resolution.reason) : null,
-        incident.provider_id,
-      ],
-    );
+    if (provider.lifecycle !== 'dead' || resolution.action !== 'dismissed')
+      await tx.query(
+        `UPDATE providers SET lifecycle=$1,death_at=CASE WHEN $2 THEN coalesce(death_at,now()) ELSE NULL END,epitaph=$3,health=CASE WHEN $5 THEN 'unknown' ELSE health END,failure_streak=0,config_version=config_version+1,next_check_at=now(),updated_at=now() WHERE id=$4`,
+        [
+          dead ? 'dead' : 'active',
+          dead,
+          dead ? (resolution.epitaph ?? provider.epitaph ?? resolution.reason) : null,
+          incident.provider_id,
+          reviving,
+        ],
+      );
     await audit(tx, actorId, `incident.${resolution.action}`, id, {
       reason: resolution.reason,
       evidenceUrls: resolution.evidenceUrls,
     });
-    await notifyResolution(tx, config, provider, id, resolution);
+    if (reviving) {
+      await clearReviewButtons(tx, `incident:${id}`);
+      await audit(tx, actorId, 'provider.revive', provider.id, resolution);
+      await notifyRevival(tx, config, provider, resolution.reason);
+    } else await notifyResolution(tx, config, provider, id, resolution);
     return { id, status };
   });
 }
@@ -189,6 +201,11 @@ export async function reviveProvider(
       "UPDATE providers SET lifecycle='active',health='unknown',death_at=NULL,epitaph=NULL,failure_streak=0,config_version=config_version+1,next_check_at=now(),updated_at=now() WHERE id=$1",
       [providerId],
     );
+    const incidents = await tx.query<{ id: string }>(
+      "UPDATE incidents SET status='resolved',resolution=$2,evidence_urls=$3,reviewer_id=$4,resolved_at=now() WHERE provider_id=$1 AND status='open' RETURNING id",
+      [providerId, input.reason, input.evidenceUrls, actorId],
+    );
+    for (const incident of incidents) await clearReviewButtons(tx, `incident:${incident.id}`);
     await audit(tx, actorId, 'provider.revive', providerId, input);
     await notifyRevival(tx, config, p, input.reason);
     return { ok: true };

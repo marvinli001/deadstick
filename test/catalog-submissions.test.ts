@@ -785,21 +785,61 @@ describe.skipIf(!connection)('catalog search and submission workflows', () => {
       (await storage.db.query('SELECT health,lifecycle FROM providers WHERE id=$1', [p.id]))[0],
     ).toEqual({ health: 'healthy', lifecycle: 'suspected' });
   });
-  it('keeps confirmed death while a revival request is awaiting manual incident resolution', async () => {
-    const p = await provider();
-    await storage.db.query("UPDATE providers SET lifecycle='dead',death_at=now() WHERE id=$1", [
-      p.id,
-    ]);
-    const lead = await post(`/providers/${p.id}/submissions`, {
-      kind: 'review',
-      body: '官网重新开始营业了',
-    });
-    expect(lead.statusCode, lead.body).toBe(201);
-    expect((await review(lead.json().id, 'approved')).statusCode).toBe(200);
-    const detail = (await app.inject({ url: `/providers/${p.id}` })).json();
-    expect(detail.lifecycle).toBe('dead');
-    expect(detail.incidents[0].status).toBe('open');
-  });
+  it.each(['dismissed', 'dead', 'recovered', 'revive'])(
+    'preserves confirmed death and only revives through an explicit manual action: %s',
+    async (action) => {
+      const p = await provider();
+      const deathAt = '2026-01-02T03:04:05.000Z';
+      await storage.db.query(
+        "UPDATE providers SET lifecycle='dead',health='down',death_at=$2,epitaph='原墓志铭' WHERE id=$1",
+        [p.id, deathAt],
+      );
+      await storage.db.query(
+        `INSERT INTO telegram_chats(id,title,kind,notification_policy)
+        VALUES ('-100123','通报群','group','{"enabled":true}')`,
+      );
+      const lead = await post(`/providers/${p.id}/submissions`, {
+        kind: 'review',
+        body: '官网重新开始营业了',
+      });
+      expect(lead.statusCode, lead.body).toBe(201);
+      const accepted = await review(lead.json().id, 'approved');
+      expect(accepted.statusCode, accepted.body).toBe(200);
+      const incidentId = accepted.json().incidentId;
+      const detail = (await app.inject({ url: `/providers/${p.id}` })).json();
+      expect(detail.lifecycle).toBe('dead');
+      expect(detail.incidents[0].status).toBe('open');
+      const resolution = {
+        reason: '人工核对本次线索',
+        evidenceUrls: ['https://evidence.example.com/checked'],
+      };
+      const result =
+        action === 'revive'
+          ? await post(`/admin/providers/${p.id}/revive`, resolution, admin)
+          : await post(`/admin/incidents/${incidentId}/resolve`, { ...resolution, action }, admin);
+      expect(result.statusCode, result.body).toBe(200);
+      const updated = (await app.inject({ url: `/providers/${p.id}` })).json();
+      const revived = action === 'recovered' || action === 'revive';
+      expect(updated.lifecycle).toBe(revived ? 'active' : 'dead');
+      expect(updated.death_at).toBe(revived ? null : deathAt);
+      expect(updated.epitaph).toBe(revived ? null : '原墓志铭');
+      expect(
+        updated.incidents.find((incident: { id: string }) => incident.id === incidentId).status,
+      ).toBe(
+        action === 'dismissed' ? 'dismissed' : action === 'dead' ? 'confirmed_dead' : 'resolved',
+      );
+      if (revived) {
+        expect(updated.health).toBe('unknown');
+        const notices = await storage.db.query<{ type: string }>(
+          "SELECT event_meta->>'type' AS type FROM notifications WHERE chat_id='-100123' AND event_meta IS NOT NULL",
+        );
+        expect(notices).toContainEqual({ type: 'revival' });
+        expect(notices).not.toContainEqual({ type: 'recovery' });
+        await check(p.id, true);
+        expect((await app.inject({ url: `/providers/${p.id}` })).json().lifecycle).toBe('active');
+      }
+    },
+  );
   it('rejects status injection, internal URLs and malformed supplement kinds', async () => {
     const p = await provider();
     const invalid = await post(`/providers/${p.id}/submissions`, {
