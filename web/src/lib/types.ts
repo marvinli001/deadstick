@@ -144,6 +144,7 @@ export interface AdminEndpoint {
 
 export interface AdminSubmission {
   id: string;
+  revision: number;
   user_id: string;
   kind: 'provider' | LeadKind;
   provider_id: string | null;

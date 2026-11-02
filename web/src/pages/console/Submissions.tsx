@@ -75,7 +75,7 @@ function ReviewForm({ submission, onDone }: { submission: AdminSubmission; onDon
         `/admin/submissions/${submission.id}/review`,
         {
           method: 'POST',
-          body: { action, reason: reason.trim() },
+          body: { action, reason: reason.trim(), revision: submission.revision },
         },
       );
       await client.invalidateQueries({ queryKey: ['admin'] });

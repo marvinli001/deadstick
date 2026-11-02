@@ -10,7 +10,7 @@ import { Value } from '@sinclair/typebox/value';
 import type { DB } from '../db.js';
 import type { Config } from '../config.js';
 import { telegramUser } from '../auth/service.js';
-import { AppError } from '../errors.js';
+import { AppError, required } from '../errors.js';
 import {
   addTribute,
   audit,
@@ -87,6 +87,7 @@ const errorText: Record<string, string> = {
   NOT_DEAD: '只有人工确认跑路的机场可以祭奠和留言。',
   ALREADY_DEAD: '这个机场已经入土。',
   ALREADY_REVIEWED: '已经有人处理过了。',
+  SUBMISSION_CHANGED: '投稿已更新，请刷新审核后重试。',
   INCIDENT_OPEN: '这个机场已有待复核的异常。',
   DUPLICATE_ENDPOINT: '入口地址重复。',
   INVALID_URL: '地址无效，只支持公网 http(s) 地址。',
@@ -865,7 +866,7 @@ function registerCatalogHandlers(
 }
 
 const reviewMarker = /^复核单：(dead|recovered|dismissed) ([0-9a-f-]{36})$/m;
-const rejectMarker = /^驳回单：([0-9a-f-]{36})$/m;
+const rejectMarker = /^驳回单：([0-9a-f-]{36})(?: ([1-9][0-9]{0,9}))?$/m;
 
 /** Reviewer console in the private chat. Every action re-checks the current role in the database. */
 function registerReviewHandlers(bot: Bot, db: DB, config: Config, v: Views, t: Tools) {
@@ -967,23 +968,36 @@ function registerReviewHandlers(bot: Bot, db: DB, config: Config, v: Views, t: T
       },
     );
   });
-  bot.callbackQuery(/^sb:([ar]):([0-9a-f-]{36})$/, async (ctx) => {
+  bot.callbackQuery(/^sb:([ar]):([0-9a-f-]{36})(?::([1-9][0-9]{0,9}))?$/, async (ctx) => {
     const user = await reviewer(ctx);
     if (!user) return;
+    const revision = Number(ctx.match[3] ?? 1);
     if (ctx.match[1] === 'a') {
       await reviewSubmission(
         db,
         config,
         ctx.match[2]!,
-        { approve: true, reason: '审核通过' },
+        { approve: true, reason: '审核通过', revision },
         user.id,
       );
       await done(ctx, `✅ 已通过 · ${user.display_name}`);
       return void (await t.answer(ctx, '已通过并收录'));
     }
+    const submission = required(
+      (
+        await db.query<{ revision: number; status: string }>(
+          'SELECT revision,status FROM submissions WHERE id=$1',
+          [ctx.match[2]!],
+        )
+      )[0],
+    );
+    if (submission.revision !== revision)
+      throw new AppError(409, 'SUBMISSION_CHANGED', '投稿已更新，请刷新审核后重试。');
+    if (submission.status !== 'pending')
+      throw new AppError(409, 'ALREADY_REVIEWED', 'Submission already reviewed');
     await t.answer(ctx);
     await ctx.reply(
-      `❌ <b>驳回投稿</b>\n回复本消息写驳回原因，会私信告知投稿人。\n\n驳回单：${ctx.match[2]}`,
+      `❌ <b>驳回投稿</b>\n回复本消息写驳回原因，会私信告知投稿人。\n\n驳回单：${ctx.match[2]} ${revision}`,
       {
         ...HTML,
         reply_markup: { force_reply: true, input_field_placeholder: '驳回原因' },
@@ -1012,7 +1026,13 @@ function registerReviewHandlers(bot: Bot, db: DB, config: Config, v: Views, t: T
     if (reject) {
       const reason = ctx.message.text.trim();
       if (!reason || reason.length > 1000) return t.reply(ctx, '驳回原因需要 1–1000 字。');
-      await reviewSubmission(db, config, reject[1]!, { approve: false, reason }, user.id);
+      await reviewSubmission(
+        db,
+        config,
+        reject[1]!,
+        { approve: false, reason, revision: Number(reject[2] ?? 1) },
+        user.id,
+      );
       return t.reply(ctx, '❌ 已驳回，已私信通知投稿人。');
     }
     const [first = '', ...rest] = ctx.message.text.trim().split('\n');

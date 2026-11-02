@@ -303,12 +303,12 @@ export async function notifySubmission(
               [
                 {
                   text: '✅ 通过',
-                  callback_data: `sb:a:${submission.id}`,
+                  callback_data: `sb:a:${submission.id}:${submission.revision ?? 1}`,
                   style: 'success' as const,
                 },
                 {
                   text: '❌ 驳回',
-                  callback_data: `sb:r:${submission.id}`,
+                  callback_data: `sb:r:${submission.id}:${submission.revision ?? 1}`,
                   style: 'danger' as const,
                 },
               ],

@@ -232,10 +232,11 @@ export function views(db: DB, config: Config) {
       const [row] = await db.query<{
         id: string;
         payload: SubmissionPayload;
+        revision: number;
         created_at: Date;
         author: string;
       }>(
-        "SELECT s.id,s.payload,s.created_at,u.display_name AS author FROM submissions s JOIN users u ON u.id=s.user_id WHERE s.status='pending' ORDER BY s.created_at LIMIT 1 OFFSET $1",
+        "SELECT s.id,s.payload,s.revision,s.created_at,u.display_name AS author FROM submissions s JOIN users u ON u.id=s.user_id WHERE s.status='pending' ORDER BY s.created_at LIMIT 1 OFFSET $1",
         [offset],
       );
       if (!row)
@@ -268,8 +269,16 @@ export function views(db: DB, config: Config) {
             ? []
             : [
                 [
-                  { text: '✅ 通过', callback_data: `sb:a:${row.id}`, style: 'success' as const },
-                  { text: '❌ 驳回', callback_data: `sb:r:${row.id}`, style: 'danger' as const },
+                  {
+                    text: '✅ 通过',
+                    callback_data: `sb:a:${row.id}:${row.revision}`,
+                    style: 'success' as const,
+                  },
+                  {
+                    text: '❌ 驳回',
+                    callback_data: `sb:r:${row.id}:${row.revision}`,
+                    style: 'danger' as const,
+                  },
                 ],
               ]),
           [
