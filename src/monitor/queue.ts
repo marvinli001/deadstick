@@ -129,7 +129,7 @@ export async function runCheck(
             : 0;
       const suspected = streak >= settings.failureThreshold;
       await tx.query(
-        'UPDATE providers SET health=$1,failure_streak=$2,lifecycle=$3,last_checked_at=now(),updated_at=now() WHERE id=$4',
+        "UPDATE providers SET health=$1,failure_streak=$2,lifecycle=CASE WHEN $3::text='active' AND EXISTS(SELECT 1 FROM incidents WHERE provider_id=$4 AND status='open' AND manual_review) THEN 'suspected' ELSE $3 END,last_checked_at=now(),updated_at=now() WHERE id=$4",
         [
           summary.health,
           streak,
@@ -152,7 +152,7 @@ export async function runCheck(
           );
       } else if (['healthy', 'degraded'].includes(summary.health)) {
         const closed = await tx.query<{ id: string }>(
-          "UPDATE incidents SET status='resolved',resolution='自动检测恢复，未确认跑路',resolved_at=now() WHERE provider_id=$1 AND status='open' RETURNING id",
+          "UPDATE incidents SET status='resolved',resolution='自动检测恢复，未确认跑路',resolved_at=now() WHERE provider_id=$1 AND status='open' AND NOT manual_review RETURNING id",
           [provider.id],
         );
         for (const incident of closed) await notifyRecovery(tx, config, provider, incident.id);

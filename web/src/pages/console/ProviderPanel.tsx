@@ -195,6 +195,7 @@ export function ProviderPanel({ id }: { id: string }) {
           slug: p.slug,
           description: p.description,
           tags: p.tags,
+          aliases: p.aliases,
           websites: eps
             .filter((e) => e.kind === 'website')
             .map((e) => ({ url: e.public_url ?? '', label: e.label })),

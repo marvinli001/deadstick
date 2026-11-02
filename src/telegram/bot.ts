@@ -1,3 +1,4 @@
+import { searchTerm } from '../catalog/search.js';
 import { Bot, GrammyError, type Context } from 'grammy';
 import type {
   InlineKeyboardMarkup,
@@ -403,11 +404,13 @@ function registerGuestMode(bot: Bot, config: Config, v: Views) {
   bot.on('guest_message', async (ctx) => {
     const message = ctx.update.guest_message!;
     const username = ctx.me.username;
-    const query = (message.text ?? message.caption ?? '')
-      .replace(new RegExp(`@${username}\\b`, 'gi'), '')
-      .trim()
-      .slice(0, 120);
-    const p = query ? ((await v.find(query)) ?? (await v.search(query, 1))[0]) : undefined;
+    const query = searchTerm(
+      (message.text ?? message.caption ?? '').replace(new RegExp(`@${username}\\b`, 'gi'), ''),
+    );
+    const matches = query ? await v.search(query, 2) : [];
+    const p = query
+      ? ((await v.find(query)) ?? (matches.length === 1 ? matches[0] : undefined))
+      : undefined;
     // Callbacks from a chat the bot is not a member of are unreliable, so only link buttons.
     const result: InlineQueryResultArticle = p
       ? {
@@ -418,10 +421,21 @@ function registerGuestMode(bot: Bot, config: Config, v: Views) {
       : {
           type: 'article',
           id: 'none',
-          title: '未找到',
+          title: matches.length > 1 ? '找到多个机场' : '未找到',
+          ...hasMarkup(
+            markup([
+              miniAppButton(
+                config,
+                '查看搜索结果',
+                `search_${Buffer.from(query).toString('base64url')}`,
+              ),
+            ]),
+          ),
           input_message_content: {
             message_text: query
-              ? `没有找到「${escape(query)}」。试试机场名称或 slug。`
+              ? matches.length > 1
+                ? '找到多个机场，请到 Mini App 选择。'
+                : `没有找到「${escape(query)}」。试试机场名称或官网。`
               : `用法：@${escape(username)} 机场名称或 slug`,
             ...HTML,
           },
@@ -553,6 +567,7 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
   );
 
   async function results(ctx: Context, query: string) {
+    query = searchTerm(query);
     const items = await v.search(query, 8);
     if (items.length === 1) {
       const view = await card(ctx, items[0]!);
@@ -573,7 +588,7 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
     );
   }
   bot.command('search', async (ctx) => {
-    const query = ctx.match.trim().slice(0, 120);
+    const query = searchTerm(ctx.match);
     if (!query)
       return t.reply(
         ctx,
@@ -586,7 +601,7 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
     const p = await v.find(ctx.match);
     if (!p)
       return ctx.match.trim()
-        ? results(ctx, ctx.match.trim().slice(0, 120))
+        ? results(ctx, searchTerm(ctx.match))
         : t.reply(ctx, '用法：<code>/status slug</code>');
     const view = await card(ctx, p);
     await t.reply(ctx, view.text, view.markup, view.rich);
@@ -809,7 +824,7 @@ function registerCatalogHandlers(bot: Bot, db: DB, config: Config, v: Views, t: 
 
   bot.on('inline_query', async (ctx) => {
     const offset = Math.min(Number(ctx.inlineQuery.offset) || 0, 1000);
-    const items = await v.search(ctx.inlineQuery.query, 20, offset);
+    const items = await v.search(searchTerm(ctx.inlineQuery.query), 20, offset);
     await ctx.answerInlineQuery(
       items.map((p) => article(p, config, ctx.me.username)),
       {

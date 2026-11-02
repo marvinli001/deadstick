@@ -105,7 +105,7 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
     },
     async (req) => ({
       items: await db.query(
-        'SELECT i.*,p.name AS provider_name FROM incidents i JOIN providers p ON i.provider_id=p.id WHERE ($4::uuid IS NOT NULL AND i.id=$4 OR $4::uuid IS NULL AND i.status=$1) ORDER BY i.created_at DESC LIMIT $2 OFFSET $3',
+        "SELECT i.*,p.name AS provider_name,(SELECT coalesce(jsonb_agg(jsonb_build_object('id',s.id,'kind',s.kind)),'[]'::jsonb) FROM submissions s WHERE s.incident_id=i.id AND s.status='approved') AS leads FROM incidents i JOIN providers p ON i.provider_id=p.id WHERE ($4::uuid IS NOT NULL AND i.id=$4 OR $4::uuid IS NULL AND i.status=$1) ORDER BY i.created_at DESC LIMIT $2 OFFSET $3",
         [
           req.query.status ?? 'open',
           req.query.limit ?? 20,

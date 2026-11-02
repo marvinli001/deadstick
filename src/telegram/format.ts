@@ -69,11 +69,11 @@ export interface ProviderView {
   candles?: number;
   incense?: number;
 }
-export const providerViewSql = `SELECT p.id,p.name,p.slug,p.lifecycle,p.health,p.description,p.epitaph,p.last_checked_at,p.death_at,
+export const providerViewSelect = `SELECT p.id,p.name,p.slug,p.lifecycle,p.health,p.description,p.epitaph,p.last_checked_at,p.death_at,
   (SELECT count(*)::int FROM tributes t WHERE t.provider_id=p.id AND t.kind='flower') AS flowers,
   (SELECT count(*)::int FROM tributes t WHERE t.provider_id=p.id AND t.kind='candle') AS candles,
-  (SELECT count(*)::int FROM tributes t WHERE t.provider_id=p.id AND t.kind='incense') AS incense
-  FROM providers p`;
+  (SELECT count(*)::int FROM tributes t WHERE t.provider_id=p.id AND t.kind='incense') AS incense`;
+export const providerViewSql = `${providerViewSelect} FROM providers p`;
 
 export const providerTitle = (p: Pick<ProviderView, 'lifecycle' | 'name'>) =>
   `${icons[p.lifecycle] ?? '✈️'} ${p.name}`;
