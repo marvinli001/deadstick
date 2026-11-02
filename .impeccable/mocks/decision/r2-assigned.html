@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>赛博纸扎</title>
+<style>
+@font-face{font-family:Smiley;src:url(smiley.woff2) format("woff2")}
+:root{--paper:#fbf8f1;--ink:#141414;--mag:#e4007f;--mag2:#b30064;--jade:#00a65a;--jade2:#007a42;--gold:#f5b800;--gold2:#c98f00;--tg:#2aabee;--tg2:#1583c0;--red:#e60012;--rule:#e6e0d3}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:var(--paper);color:var(--ink);font-family:"PingFang SC",sans-serif;position:relative}
+header{display:flex;align-items:center;height:88px;padding:0 64px}
+.logo{font:56px/1 Smiley;letter-spacing:-1px}
+nav{margin-left:auto;display:flex;gap:40px;font-size:22px}
+nav b{background:var(--ink);color:var(--paper);padding:8px 18px;font-weight:500}
+.count{position:absolute;left:64px;top:170px}
+.count .n{font:300px/0.8 Smiley;letter-spacing:-12px}
+.count .l{font:40px/1 Smiley;margin-top:28px}
+.count .l i{font-style:normal;color:var(--red)}
+.search{position:absolute;left:64px;top:560px;width:560px;height:72px;border:3px solid var(--ink);display:flex;align-items:center;padding:0 24px;font-size:24px;color:#8a8478}
+.search span{margin-left:auto;width:48px;height:48px;background:var(--ink)}
+.tomb{position:absolute;left:800px;top:120px;width:420px;height:560px}
+.f{position:absolute}
+.chry{position:absolute;width:120px;height:120px;border-radius:50%;background:repeating-conic-gradient(var(--gold) 0 15deg,var(--gold2) 15deg 30deg)}
+.chry::after{content:"";position:absolute;inset:38px;border-radius:50%;background:var(--ink)}
+.row{position:absolute;left:0;right:0;bottom:0;height:168px;border-top:3px solid var(--ink);display:flex;align-items:flex-end;gap:28px;padding:0 64px 0}
+.mini{width:100px;display:flex;flex-direction:column;align-items:center;gap:8px}
+.mini .s{width:84px;height:96px;clip-path:polygon(50% 0,100% 22%,100% 100%,0 100%,0 22%)}
+.mini span{font-size:22px;padding-bottom:12px}
+</style>
+</head>
+<body>
+<header><div class="logo">DEADSTICK</div><nav><span>墓园</span><span>机场</span><span>投稿</span><b>登录</b></nav></header>
+<div class="count"><div class="n">042</div><div class="l">家<i>已跑路</i></div></div>
+<div class="search">搜机场<span></span></div>
+<div class="tomb">
+  <div class="f" style="left:60px;top:80px;width:150px;height:420px;background:var(--tg);clip-path:polygon(0 18%,100% 0,100% 100%,0 100%)"></div>
+  <div class="f" style="left:210px;top:80px;width:150px;height:420px;background:var(--tg2);clip-path:polygon(0 0,100% 18%,100% 100%,0 100%)"></div>
+  <div class="f" style="left:110px;top:200px;width:200px;height:70px;background:var(--paper);display:grid;place-items:center;font:44px/1 Smiley">示例云</div>
+  <div class="f" style="left:120px;top:300px;width:180px;height:24px;background:var(--paper);opacity:.85"></div>
+  <div class="f" style="left:20px;top:500px;width:380px;height:60px;background:var(--mag);clip-path:polygon(6% 0,94% 0,100% 100%,0 100%)"></div>
+  <div class="f" style="left:0;top:500px;width:60px;height:60px;background:var(--mag2);clip-path:polygon(100% 0,100% 100%,0 100%)"></div>
+  <div class="chry" style="left:-20px;top:390px"></div>
+  <div class="chry" style="left:330px;top:420px;width:96px;height:96px"></div>
+  <div class="f" style="left:150px;top:-10px;width:120px;height:90px;background:var(--jade);clip-path:polygon(50% 0,100% 100%,0 100%)"></div>
+  <div class="f" style="left:210px;top:-10px;width:60px;height:90px;background:var(--jade2);clip-path:polygon(0 0,100% 100%,0 100%)"></div>
+</div>
+<div class="row">
+  <div class="mini"><div class="s" style="background:var(--mag)"></div><span>月光</span></div>
+  <div class="mini"><div class="s" style="background:var(--jade)"></div><span>星际</span></div>
+  <div class="mini"><div class="s" style="background:var(--gold)"></div><span>极光</span></div>
+  <div class="mini"><div class="s" style="background:var(--tg)"></div><span>白鲸</span></div>
+  <div class="mini"><div class="s" style="background:var(--mag)"></div><span>银河</span></div>
+  <div class="mini"><div class="s" style="background:var(--jade)"></div><span>飞猫</span></div>
+  <div class="mini"><div class="s" style="background:var(--gold)"></div><span>云梯</span></div>
+  <div class="mini"><div class="s" style="background:var(--tg)"></div><span>快鸟</span></div>
+  <div class="mini"><div class="s" style="background:var(--mag)"></div><span>蓝鲸</span></div>
+  <div class="mini"><div class="s" style="background:var(--jade)"></div><span>阿飘</span></div>
+  <div class="mini"><div class="s" style="background:var(--gold)"></div><span>小火箭</span></div>
+</div>
+</body>
+</html>

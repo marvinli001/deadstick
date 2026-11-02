@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>字重墓园</title>
+<style>
+:root{--paper:#f6f6f3;--ink:#0a0a0a;--acc:#2aabee;--dim:#a3a39e}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:var(--paper);color:var(--ink);font-family:"PingFang SC",sans-serif}
+header{display:flex;align-items:center;height:80px;padding:0 56px;font:22px Menlo,monospace}
+header nav{margin-left:auto;display:flex;gap:32px}
+.line{display:flex;align-items:baseline;gap:32px;padding:0 56px;border-top:1px solid #d9d9d4}
+.line .name{font-size:150px;line-height:1.08;letter-spacing:-4px}
+.line .tag{font:22px Menlo,monospace;color:var(--dim);margin-left:auto}
+.w9{font-weight:600}.w5{font-weight:400}.w1{font-weight:100;color:#8d8d88}
+.axis{position:absolute;left:56px;right:56px;bottom:48px;height:40px;display:flex;align-items:center;gap:20px;font:22px Menlo,monospace}
+.axis .track{flex:1;height:3px;background:var(--ink);position:relative}
+.axis .track i{position:absolute;left:62%;top:-14px;width:30px;height:30px;background:var(--acc)}
+</style>
+</head>
+<body>
+<header><span>DEADSTICK</span><nav><span>墓园</span><span>机场</span><span>投稿</span><span>登录</span></nav></header>
+<div class="line"><span class="name w9">星际机场</span><span class="tag">存活 · 503d</span></div>
+<div class="line"><span class="name w5">某某加速</span><span class="tag">疑似 · 核验中</span></div>
+<div class="line"><span class="name w1">示例云</span><span class="tag">入土 · 10.31</span></div>
+<div class="axis"><span>存活</span><span class="track"><i></i></span><span>入土</span></div>
+</body>
+</html>

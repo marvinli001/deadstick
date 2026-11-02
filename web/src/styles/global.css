@@ -118,6 +118,13 @@ textarea {
   caret-color: var(--ink);
 }
 
+/* iOS zooms focused fields below 16px, including inside Telegram's WebView. */
+@media (any-pointer: coarse) {
+  :root :is(input, textarea, select) {
+    font-size: max(16px, 1em);
+  }
+}
+
 a {
   color: inherit;
   text-decoration-thickness: 1px;

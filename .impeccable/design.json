@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-01T06:23:07.489236+00:00",
+  "title": "Design System: Deadstick",
+  "extensions": {
+    "shadows": [
+      {
+        "name": "resting",
+        "value": "none",
+        "purpose": "常态内容保持平面。"
+      },
+      {
+        "name": "floating",
+        "value": "0 0 0 1px var(--ink), 0 18px 40px rgb(17 17 17 / 0.12)",
+        "purpose": "浮层轮廓与阴影。"
+      }
+    ],
+    "motion": [
+      {
+        "name": "fast",
+        "value": "160ms",
+        "purpose": "悬停和轻量反馈。"
+      },
+      {
+        "name": "standard",
+        "value": "240ms",
+        "purpose": "状态切换。"
+      },
+      {
+        "name": "ease-standard",
+        "value": "cubic-bezier(.22,1,.36,1)",
+        "purpose": "Arc 标准缓动。"
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "public-mobile",
+        "value": "720px"
+      },
+      {
+        "name": "console-compact",
+        "value": "900px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "主按钮",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "主要操作",
+      "html": "<button class=\"ds-button-primary\">保存</button>",
+      "css": ".ds-button-primary{min-height:44px;padding:0 16px;border:1px solid var(--ink);border-radius:0;background:var(--ink);color:var(--paper);font:500 14px/1.6 var(--font-body);cursor:pointer;transition:opacity 160ms,background 160ms;}.ds-button-primary:hover{opacity:.91;}.ds-button-primary:focus-visible{outline:2px solid var(--ink);outline-offset:2px;}"
+    },
+    {
+      "name": "次按钮",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "次级操作",
+      "html": "<button class=\"ds-button-secondary\">保存</button>",
+      "css": ".ds-button-secondary{min-height:44px;padding:0 16px;border:1px solid var(--border);border-radius:0;background:var(--paper);color:var(--ink);font:500 14px/1.6 var(--font-body);cursor:pointer;transition:opacity 160ms,background 160ms;}.ds-button-secondary:hover{background:var(--paper-2);}.ds-button-secondary:focus-visible{outline:2px solid var(--ink);outline-offset:2px;}"
+    },
+    {
+      "name": "输入框",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "带标签的直角输入框。",
+      "html": "<label class=\"ds-field\">名称<input aria-label=\"名称\" placeholder=\"机场名称\"></label>",
+      "css": ".ds-field{display:grid;gap:8px;color:var(--ink);font:500 14px/1.6 var(--font-body);}.ds-field input{min-height:44px;padding:0 12px;border:1px solid var(--ink);border-radius:0;background:var(--paper);color:var(--ink);font:400 14px/1.6 var(--font-body);}.ds-field input::placeholder{color:var(--ink-3);}.ds-field input:hover{background:var(--paper-2);}.ds-field input:focus-visible{outline:2px solid var(--ink);outline-offset:2px;}"
+    },
+    {
+      "name": "主导航",
+      "kind": "nav",
+      "description": "墨色下划线标明当前位置。",
+      "html": "<nav class=\"ds-nav\"><a href=\"#\" aria-current=\"page\">墓园</a><a href=\"#\">机场</a><a href=\"#\">投稿</a></nav>",
+      "css": ".ds-nav{display:flex;gap:28px;font:15px/1.6 var(--font-body);}.ds-nav a{padding:6px 0;color:var(--ink-2);text-decoration:none;border-bottom:2px solid transparent;}.ds-nav a[aria-current]{color:var(--ink);border-color:var(--ink);}.ds-nav a:hover{color:var(--ink);}.ds-nav a:focus-visible{outline:2px solid var(--ink);outline-offset:2px;}"
+    },
+    {
+      "name": "疑似状态",
+      "kind": "chip",
+      "description": "菊黄浅底，文字同时传达状态。",
+      "html": "<span class=\"ds-status\">疑似跑路</span>",
+      "css": ".ds-status{display:inline-flex;padding:2px 8px;border:1px solid var(--chry);border-radius:0;background:var(--chry-wash);color:var(--chry-ink);font:13px/1.6 var(--font-body);}"
+    }
+  ],
+  "narrative": {
+    "northStar": "白菊讣告",
+    "overview": "白纸、黑框、仿宋和一枚菊黄花心。每家确认跑路的机场得到一张讣告，名字、生卒、死因和祭奠构成视觉中心。明亮、年轻、平面化；不采用暗色霓虹、街机或航显屏方向。",
+    "keyCharacteristics": [
+      "10px 黑色外框，公开页手机端收为 6px。",
+      "仿宋标题，系统无衬线正文，等宽日期和计数。",
+      "直角控件、细分隔线、克制用色。",
+      "献花、点烛、上香是主要的品牌动效。"
+    ],
+    "dos": [
+      "使用现有语义令牌和 Arc 免费组件，保持公开页、用户中心、后台一致。",
+      "保留简体中文、可见焦点、加载、失败、空白和成功状态。",
+      "显示人工结论及证据；自动检测只能产生疑似状态。",
+      "在公开页面隐藏订阅凭据，编辑时要求重新填写订阅。"
+    ],
+    "donts": [
+      "不添加无意义的说明句、眉标和子标题。",
+      "不引入暗色霓虹、渐变文字、玻璃卡片、装饰投影或大圆角。",
+      "不把正常、疑似和确认跑路混为同一种状态。",
+      "不用 emoji 代替图标，也不用等宽字体排整段中文。"
+    ]
+  }
+}

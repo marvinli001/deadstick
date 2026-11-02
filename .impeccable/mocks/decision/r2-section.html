@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>剖面墓园</title>
+<style>
+:root{--lime:#f4f1ea;--poche:#2b2b2b;--sun:#f0b429;--shade:#6f8fb5;--ink:#1a1a1a}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:var(--lime);color:var(--ink);font-family:"PingFang SC",sans-serif;position:relative}
+header{display:flex;align-items:center;height:80px;padding:0 56px;font-size:22px}
+header b{font-size:32px}
+header nav{margin-left:auto;display:flex;gap:36px}
+.sun{position:absolute;left:0;right:0;top:80px;height:330px;background:linear-gradient(115deg,transparent 0 40%,#f0b42933 40% 62%,transparent 62%)}
+.bld{position:absolute;bottom:490px;width:90px;background:var(--lime);border:3px solid var(--ink)}
+.ground{position:absolute;left:0;right:0;top:410px;height:490px;background:var(--poche)}
+.plot{position:absolute;width:150px;height:84px;background:var(--lime);display:grid;place-items:center;font-size:26px}
+.big{position:absolute;left:56px;top:110px;font-size:120px;font-weight:600;letter-spacing:-4px}
+.big small{font-size:40px;font-weight:400;margin-left:12px}
+</style>
+</head>
+<body>
+<header><b>DEADSTICK</b><nav><span>墓园</span><span>机场</span><span>投稿</span><span>登录</span></nav></header>
+<div class="sun"></div>
+<div class="big">1284<small>在线</small></div>
+<div class="bld" style="left:640px;height:200px"></div><div class="bld" style="left:750px;height:280px"></div><div class="bld" style="left:860px;height:150px;border-color:var(--sun)"></div><div class="bld" style="left:970px;height:240px"></div><div class="bld" style="left:1080px;height:120px"></div><div class="bld" style="left:1190px;height:300px"></div>
+<div class="ground">
+  <div class="plot" style="left:120px;top:70px">示例云</div><div class="plot" style="left:330px;top:150px">月光</div><div class="plot" style="left:560px;top:60px">星际</div><div class="plot" style="left:800px;top:190px">极光</div><div class="plot" style="left:1030px;top:90px">白鲸</div><div class="plot" style="left:220px;top:290px">银河</div><div class="plot" style="left:640px;top:320px">飞猫</div><div class="plot" style="left:1110px;top:300px">云梯</div>
+</div>
+</body>
+</html>
