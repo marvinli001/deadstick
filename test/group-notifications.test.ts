@@ -397,6 +397,50 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('group notification business beh
       error_code: 'RETRIES_EXHAUSTED',
     });
   });
+  it.each(['sendMessage', 'getChatAdministrators'])(
+    'keeps new events behind a recipient cooldown after %s is rate limited',
+    async (limitedMethod) => {
+      await save();
+      await event('rate-limited');
+      const impl = sender.send.getMockImplementation()!;
+      sender.send.mockImplementation(async (method, params) => {
+        if (method === limitedMethod && params.chat_id === '-100123')
+          throw new TelegramError(429, 120);
+        return impl(method, params);
+      });
+      await dispatchNotifications(storage.db, sender);
+      await event('arrived-during-cooldown');
+      sender.send.mockImplementation(impl);
+      expect((await save(policy({ tone: 'playful' }))).statusCode).toBe(200);
+      await storage.db.query('INSERT INTO follows(user_id,provider_id) VALUES ($1,$2)', [
+        userId,
+        providerId,
+      ]);
+      await enqueue(storage.db, 'other-recipient', '42', { text: '个人动态' }, null, {
+        audience: 'follower',
+        event: { providerId, type: 'anomaly' },
+      });
+      sender.send.mockClear();
+      await dispatchNotifications(storage.db, sender);
+      expect(sender.send.mock.calls.some(([, params]) => params.chat_id === '-100123')).toBe(false);
+      expect(sender.send.mock.calls).toEqual([
+        ['sendMessage', { text: '个人动态', chat_id: '42' }],
+      ]);
+      expect(
+        (
+          await storage.db.query(
+            "SELECT status,attempts FROM notifications WHERE dedupe_key='arrived-during-cooldown'",
+          )
+        )[0],
+      ).toEqual({ status: 'pending', attempts: 0 });
+      await storage.db.query("UPDATE notifications SET available_at=now() WHERE status='pending'");
+      await dispatchNotifications(storage.db, sender);
+      await dispatchNotifications(storage.db, sender);
+      expect(
+        await storage.db.query("SELECT id FROM notifications WHERE status='sent'"),
+      ).toHaveLength(3);
+    },
+  );
   it('applies personal manual-only and schedule preferences and rechecks unfollows', async () => {
     await storage.db.query('INSERT INTO follows(user_id,provider_id) VALUES ($1,$2)', [
       userId,
