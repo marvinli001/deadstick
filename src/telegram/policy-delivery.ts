@@ -55,6 +55,20 @@ export async function dispatchPolicyNotifications(db: DB, sender: TelegramSender
         [recipient.chat_id],
       );
       if (!lock!.locked) return;
+      const [cooldown] = await tx.query<{ until: Date | null }>(
+        `SELECT max(available_at) AS until FROM notifications WHERE chat_id=$1
+          AND status IN ('pending','failed') AND error_code IN ('TELEGRAM_429','RETRIES_EXHAUSTED')
+          AND available_at>now()`,
+        [recipient.chat_id],
+      );
+      if (cooldown!.until) {
+        await tx.query(
+          `UPDATE notifications SET available_at=GREATEST(available_at,$2) WHERE chat_id=$1
+            AND event_meta IS NOT NULL AND status='pending' AND available_at<$2`,
+          [recipient.chat_id, cooldown!.until],
+        );
+        return;
+      }
       const rows = await tx.query<EventRow>(
         `SELECT * FROM notifications WHERE chat_id=$1 AND audience=$2 AND event_meta IS NOT NULL
       AND attempts<8 AND (available_at<=now() OR attempts=0) AND (status='pending' OR status='running' AND lease_until<now())
@@ -295,8 +309,14 @@ export async function dispatchPolicyNotifications(db: DB, sender: TelegramSender
         } else {
           const delay = error instanceof TelegramError && error.retryAfter ? error.retryAfter : 60;
           await tx.query(
-            "UPDATE notifications SET status='pending',attempts=attempts+1,available_at=now()+$2*interval '1 second',lease_until=NULL,error_code='PERMISSION_CHECK_FAILED' WHERE id=ANY($1::uuid[])",
-            [rows.map((r) => r.id), delay],
+            "UPDATE notifications SET status='pending',attempts=attempts+1,available_at=now()+$2*interval '1 second',lease_until=NULL,error_code=$3 WHERE id=ANY($1::uuid[])",
+            [
+              rows.map((r) => r.id),
+              delay,
+              error instanceof TelegramError && error.code === 429
+                ? 'TELEGRAM_429'
+                : 'PERMISSION_CHECK_FAILED',
+            ],
           );
         }
       }
