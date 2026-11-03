@@ -21,6 +21,7 @@ export function HealthMark({ value, label = true }: { value: Health; label?: boo
 
 const statusText: Record<string, string> = {
   pending: '待审',
+  needs_info: '待补充',
   approved: '已通过',
   rejected: '已驳回',
   open: '待核验',
@@ -37,6 +38,7 @@ const statusText: Record<string, string> = {
 
 const tone: Record<string, string> = {
   pending: 'wait',
+  needs_info: 'wait',
   open: 'wait',
   running: 'wait',
   approved: 'ok',

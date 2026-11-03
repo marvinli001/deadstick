@@ -1,3 +1,5 @@
+import { searchFrom, searchProviders, searchTerm } from './search.js';
+import { createLead, duplicateProviders, prepareSubmission, safeSubmissionColumns, supplementSubmission } from './submissions.js';
 import type { FastifyInstance } from 'fastify';
 import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import { Type } from '@sinclair/typebox';
@@ -5,7 +7,7 @@ import type { DB } from '../db.js';
 import type { Config } from '../config.js';
 import { authenticated, reviewer } from '../auth/service.js';
 import { required } from '../errors.js';
-import { Id, Page, ProviderInput } from './schemas.js';
+import { Id, Page, ProviderInput, SubmissionInput, SubmissionReview, LeadInput } from './schemas.js';
 import {
   addTribute,
   audit,
@@ -55,7 +57,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
         tags: ['catalog'],
         querystring: Type.Object({
           ...Page,
-          q: Type.Optional(Type.String({ maxLength: 120 })),
+          q: Type.Optional(Type.String({ maxLength: 4096 })),
           lifecycle: Type.Optional(
             Type.Union([Type.Literal('active'), Type.Literal('suspected'), Type.Literal('dead')]),
           ),
@@ -65,15 +67,10 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     },
     async (req) => {
       const { q, lifecycle, tag, limit = 20, offset = 0 } = req.query;
-      const filter =
-        "FROM providers p WHERE ($1::text IS NULL OR p.name ILIKE '%'||$1||'%' OR p.slug ILIKE '%'||$1||'%') AND ($2::text IS NULL OR p.lifecycle=$2) AND ($3::text IS NULL OR $3=ANY(p.tags))";
-      const values = [q ?? null, lifecycle ?? null, tag ?? null];
+      const values = [searchTerm(q ?? ''), lifecycle ?? null, tag ?? null];
       const [items, total] = await Promise.all([
-        db.query(
-          `SELECT ${providerColumns},(SELECT count(*)::int FROM tributes t WHERE t.provider_id=p.id) AS tribute_count ${filter} ORDER BY p.created_at DESC,p.id LIMIT $4 OFFSET $5`,
-          [...values, limit, offset],
-        ),
-        count(filter, values),
+        searchProviders(db, `SELECT ${providerColumns},(SELECT count(*)::int FROM tributes t WHERE t.provider_id=p.id) AS tribute_count`, q ?? '', limit, offset, { lifecycle, tag }),
+        count(searchFrom, values),
       ]);
       return { items, total, limit, offset };
     },
@@ -131,10 +128,10 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     {
       preHandler: authenticated,
       config: { rateLimit: { max: 5, timeWindow: '1 hour' } },
-      schema: { tags: ['submissions'], body: ProviderInput },
+      schema: { tags: ['submissions'], body: SubmissionInput },
     },
     async (req, reply) => {
-      const row = await createSubmission(db, config, req.user!, prepareProvider(req.body, config));
+      const row = await createSubmission(db, config, req.user!, prepareSubmission(req.body, config));
       reply.code(201);
       return row;
     },
@@ -147,11 +144,31 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     },
     async (req) => ({
       items: await db.query(
-        "SELECT id,payload->>'name' AS name,status,reason,provider_id,created_at,reviewed_at FROM submissions WHERE user_id=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+        `SELECT ${safeSubmissionColumns} FROM submissions s WHERE s.user_id=$1 ORDER BY s.created_at DESC LIMIT $2 OFFSET $3`,
         [req.user!.id, req.query.limit ?? 20, req.query.offset ?? 0],
       ),
     }),
   );
+  api.post('/submissions/check', {
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+    schema: { tags: ['submissions'], body: Type.Object({ name: Type.String({ maxLength: 120 }), website: Type.Optional(Type.String({ maxLength: 4096 })) }, { additionalProperties: false }) },
+  }, async (req) => ({ items: await duplicateProviders(db, req.body.name, req.body.website ? [req.body.website] : []) }),
+  );
+  api.get('/submissions/:id', {
+    preHandler: authenticated, schema: { tags: ['submissions'], params: Id },
+  }, async (req) => required((await db.query(`SELECT ${safeSubmissionColumns} FROM submissions s WHERE s.id=$1 AND s.user_id=$2`, [req.params.id, req.user!.id]))[0]));
+  api.put('/submissions/:id', {
+    preHandler: authenticated, config: { rateLimit: { max: 10, timeWindow: '1 hour' } },
+    schema: { tags: ['submissions'], params: Id, body: Type.Union([SubmissionInput, LeadInput]) },
+  }, (req) => supplementSubmission(db, config, req.user!, req.params.id, req.body));
+  api.post('/providers/:id/submissions', {
+    preHandler: authenticated, config: { rateLimit: { max: 10, timeWindow: '1 hour' } },
+    schema: { tags: ['submissions'], params: Id, body: LeadInput },
+  }, async (req, reply) => {
+    const row = await createLead(db, config, req.user!, req.params.id, req.body);
+    reply.code(201);
+    return row;
+  });
   api.post(
     '/admin/providers',
     { preHandler: reviewer, schema: { tags: ['admin'], body: ProviderInput } },
@@ -170,7 +187,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
         tags: ['admin'],
         querystring: Type.Object({
           ...Page,
-          q: Type.Optional(Type.String({ maxLength: 120 })),
+          q: Type.Optional(Type.String({ maxLength: 4096 })),
           lifecycle: Type.Optional(
             Type.Union([Type.Literal('active'), Type.Literal('suspected'), Type.Literal('dead')]),
           ),
@@ -179,15 +196,10 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     },
     async (req) => {
       const { q, lifecycle, limit = 20, offset = 0 } = req.query;
-      const filter =
-        "FROM providers p WHERE ($1::text IS NULL OR p.name ILIKE '%'||$1||'%' OR p.slug ILIKE '%'||$1||'%') AND ($2::text IS NULL OR p.lifecycle=$2)";
-      const values = [q ?? null, lifecycle ?? null];
+      const values = [searchTerm(q ?? ''), lifecycle ?? null, null];
       const [items, total] = await Promise.all([
-        db.query(
-          `SELECT ${providerColumns},p.enabled,p.failure_streak,p.next_check_at,p.updated_at,(SELECT count(*)::int FROM endpoints e WHERE e.provider_id=p.id AND e.kind='website') AS website_count,(SELECT count(*)::int FROM endpoints e WHERE e.provider_id=p.id AND e.kind='subscription') AS subscription_count ${filter} ORDER BY p.created_at DESC,p.id LIMIT $3 OFFSET $4`,
-          [...values, limit, offset],
-        ),
-        count(filter, values),
+        searchProviders(db, `SELECT ${providerColumns},p.enabled,p.failure_streak,p.next_check_at,p.updated_at,(SELECT count(*)::int FROM endpoints e WHERE e.provider_id=p.id AND e.kind='website') AS website_count,(SELECT count(*)::int FROM endpoints e WHERE e.provider_id=p.id AND e.kind='subscription') AS subscription_count`, q ?? '', limit, offset, { lifecycle }),
+        count(searchFrom, values),
       ]);
       return { items, total, limit, offset };
     },
@@ -202,8 +214,8 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
           (await tx.query('SELECT id FROM providers WHERE id=$1 FOR UPDATE', [req.params.id]))[0],
         );
         await tx.query(
-          'UPDATE providers SET name=$1,slug=$2,description=$3,tags=$4,config_version=config_version+1,next_check_at=now(),updated_at=now() WHERE id=$5',
-          [p.name, p.slug, p.description, p.tags, req.params.id],
+          'UPDATE providers SET name=$1,slug=$2,description=$3,tags=$4,aliases=coalesce($6,aliases),config_version=config_version+1,next_check_at=now(),updated_at=now() WHERE id=$5',
+          [p.name, p.slug, p.description, p.tags, req.params.id, req.body.aliases ?? undefined],
         );
         await tx.query('DELETE FROM endpoints WHERE provider_id=$1', [req.params.id]);
         await insertEndpoints(tx, req.params.id, p.endpoints);
@@ -271,6 +283,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
           status: Type.Optional(
             Type.Union([
               Type.Literal('pending'),
+              Type.Literal('needs_info'),
               Type.Literal('approved'),
               Type.Literal('rejected'),
             ]),
@@ -280,7 +293,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     },
     async (req) => ({
       items: await db.query(
-        "SELECT id,user_id,payload - 'endpoints' AS provider,jsonb_array_length(payload->'endpoints') AS endpoint_count,status,reason,created_at FROM submissions WHERE ($4::uuid IS NOT NULL AND id=$4 OR $4::uuid IS NULL AND status=$1) ORDER BY created_at LIMIT $2 OFFSET $3",
+        `SELECT ${safeSubmissionColumns},s.user_id FROM submissions s WHERE ($4::uuid IS NOT NULL AND s.id=$4 OR $4::uuid IS NULL AND s.status=$1) ORDER BY s.created_at LIMIT $2 OFFSET $3`,
         [
           req.query.status ?? 'pending',
           req.query.limit ?? 20,
@@ -297,10 +310,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
       schema: {
         tags: ['admin'],
         params: Id,
-        body: Type.Object(
-          { approve: Type.Boolean(), reason: Type.String({ minLength: 1, maxLength: 1000 }) },
-          { additionalProperties: false },
-        ),
+        body: SubmissionReview,
       },
     },
     (req) => reviewSubmission(db, config, req.params.id, req.body, req.user!.id),

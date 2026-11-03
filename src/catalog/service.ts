@@ -10,12 +10,10 @@ import {
   notifyMemorial,
   notifyResolution,
   notifyRevival,
-  notifySubmission,
-  notifySubmissionResult,
 } from '../telegram/notifications.js';
 
 export const providerColumns =
-  'p.id,p.slug,p.name,p.description,p.tags,p.lifecycle,p.health,p.last_checked_at,p.death_at,p.epitaph,p.created_at';
+  'p.id,p.slug,p.name,p.description,p.tags,p.aliases,p.lifecycle,p.health,p.last_checked_at,p.death_at,p.epitaph,p.created_at';
 export async function audit(
   db: DB,
   actorId: string | null,
@@ -31,6 +29,7 @@ export async function audit(
   ]);
 }
 export function prepareProvider(input: ProviderInput, config: Config) {
+  if (!input.name.trim()) throw new AppError(400, 'INVALID_NAME', 'Name required');
   const seen = new Set<string>();
   const endpoints = input.endpoints.map((endpoint) => {
     const url = validateUrl(endpoint.url);
@@ -46,7 +45,8 @@ export function prepareProvider(input: ProviderInput, config: Config) {
     };
   });
   return {
-    name: input.name,
+    name: input.name.trim(),
+    aliases: input.aliases?.map((alias) => alias.trim()).filter(Boolean) ?? [],
     slug: input.slug,
     description: input.description ?? '',
     tags: input.tags ?? [],
@@ -67,8 +67,8 @@ export async function insertEndpoints(
 }
 export async function createProvider(db: DB, input: PreparedProvider, actorId: string) {
   const [row] = await db.query<{ id: string }>(
-    'INSERT INTO providers(name,slug,description,tags) VALUES ($1,$2,$3,$4) RETURNING id',
-    [input.name, input.slug, input.description, input.tags],
+    'INSERT INTO providers(name,slug,description,tags,aliases) VALUES ($1,$2,$3,$4,$5) RETURNING id',
+    [input.name, input.slug, input.description, input.tags, input.aliases ?? []],
   );
   await insertEndpoints(db, row!.id, input.endpoints);
   await audit(db, actorId, 'provider.create', row!.id);
@@ -194,69 +194,7 @@ export async function reviveProvider(
     return { ok: true };
   });
 }
-export async function createSubmission(
-  db: DB,
-  config: Config,
-  user: { id: string; display_name: string },
-  payload: PreparedProvider,
-  sourceUpdateId: number | null = null,
-) {
-  return db.transaction(async (tx) => {
-    const [row] = await tx.query<{ id: string; status: string; created_at: Date }>(
-      'INSERT INTO submissions(user_id,payload,source_update_id) VALUES ($1,$2,$3) ON CONFLICT(source_update_id) DO NOTHING RETURNING id,status,created_at',
-      [user.id, JSON.stringify(payload), sourceUpdateId],
-    );
-    if (row)
-      await notifySubmission(tx, config, {
-        id: row.id,
-        name: payload.name,
-        slug: payload.slug,
-        hosts: payload.endpoints.filter((e) => e.kind === 'website').map((e) => e.display_host),
-        subscriptions: payload.endpoints.filter((e) => e.kind === 'subscription').length,
-        author: user.display_name,
-      });
-    return row;
-  });
-}
-export async function reviewSubmission(
-  db: DB,
-  config: Config,
-  id: string,
-  input: { approve: boolean; reason: string },
-  actorId: string,
-) {
-  return db.transaction(async (tx) => {
-    const row = required(
-      (
-        await tx.query<{ status: string; user_id: string; payload: PreparedProvider }>(
-          'SELECT status,user_id,payload FROM submissions WHERE id=$1 FOR UPDATE',
-          [id],
-        )
-      )[0],
-    );
-    if (row.status !== 'pending')
-      throw new AppError(409, 'ALREADY_REVIEWED', 'Submission already reviewed');
-    const provider = input.approve ? await createProvider(tx, row.payload, actorId) : null;
-    await tx.query(
-      'UPDATE submissions SET status=$1,reason=$2,reviewer_id=$3,provider_id=$4,reviewed_at=now() WHERE id=$5',
-      [input.approve ? 'approved' : 'rejected', input.reason, actorId, provider?.id ?? null, id],
-    );
-    await audit(tx, actorId, 'submission.review', id, { approve: input.approve });
-    await notifySubmissionResult(
-      tx,
-      config,
-      {
-        id,
-        userId: row.user_id,
-        name: row.payload.name,
-        approved: input.approve,
-        reason: input.reason,
-      },
-      provider ? { id: provider.id, name: row.payload.name, slug: row.payload.slug } : undefined,
-    );
-    return { providerId: provider?.id ?? null };
-  });
-}
+export { createSubmission, reviewSubmission } from './submissions.js';
 export async function createMemorial(
   db: DB,
   providerId: string,

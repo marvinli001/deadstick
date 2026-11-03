@@ -1,7 +1,8 @@
+import { searchProviders } from '../catalog/search.js';
 import type { InlineKeyboardMarkup } from 'grammy/types';
 import type { DB } from '../db.js';
 import type { Config } from '../config.js';
-import type { PreparedProvider } from '../catalog/service.js';
+import type { SubmissionPayload } from '../catalog/submissions.js';
 import {
   ceremonyCard,
   ceremonyKeyboard,
@@ -20,6 +21,7 @@ import {
   richButtons,
   providerKeyboard,
   providerViewSql,
+  providerViewSelect,
   reviewKeyboard,
   time,
   type CheckRun,
@@ -43,13 +45,12 @@ export function views(db: DB, config: Config) {
     const value = query.trim().toLowerCase();
     if (!value) return undefined;
     const id = uuid.test(value) ? value : expandId(value);
-    return id ? one('WHERE p.id=$1', [id]) : one('WHERE p.slug=$1', [value]);
+    if (id) return one('WHERE p.id=$1', [id]);
+    const matches = await searchProviders<ProviderView>(db, providerViewSelect, value, 2, 0, { exact: true });
+    return matches.length === 1 ? matches[0] : undefined;
   }
   const search = (query: string, limit: number, offset = 0) =>
-    db.query<ProviderView>(
-      `${providerViewSql} WHERE ($1='' OR p.name ILIKE '%'||$1||'%' OR p.slug ILIKE '%'||$1||'%') ORDER BY (p.lifecycle='dead') DESC,p.death_at DESC NULLS LAST,p.created_at DESC LIMIT $2 OFFSET $3`,
-      [query.trim().slice(0, 120), limit, offset],
-    );
+    searchProviders<ProviderView>(db, providerViewSelect, query, limit, offset);
   async function following(userId: string | undefined, providerId: string) {
     if (!userId) return false;
     return Boolean(
@@ -228,7 +229,7 @@ export function views(db: DB, config: Config) {
     async submission(offset: number): Promise<View> {
       const [row] = await db.query<{
         id: string;
-        payload: PreparedProvider;
+        payload: SubmissionPayload;
         created_at: Date;
         author: string;
       }>(
@@ -244,7 +245,8 @@ export function views(db: DB, config: Config) {
       const p = row.payload;
       return {
         text: [
-          '📮 <b>投稿待审核</b>',
+          p.report ? '<b>线索待审核</b>' : '<b>投稿待审核</b>',
+          p.report ? escape(clip(p.report.body, 600)) : '',
           `${escape(p.name)} · <code>${escape(p.slug)}</code>`,
           `官网：${escape(
             p.endpoints
@@ -261,10 +263,10 @@ export function views(db: DB, config: Config) {
           .filter(Boolean)
           .join('\n'),
         markup: markup([
-          [
-            { text: '✅ 通过', callback_data: `sb:a:${row.id}`, style: 'success' },
-            { text: '❌ 驳回', callback_data: `sb:r:${row.id}`, style: 'danger' },
-          ],
+          ...(p.report ? [] : [[
+            { text: '✅ 通过', callback_data: `sb:a:${row.id}`, style: 'success' as const },
+            { text: '❌ 驳回', callback_data: `sb:r:${row.id}`, style: 'danger' as const },
+          ]]),
           [
             { text: '‹ 待处理', callback_data: 'pd' },
             { text: '下一条 ›', callback_data: `ps:${offset + 1}` },

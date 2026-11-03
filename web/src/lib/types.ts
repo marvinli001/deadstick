@@ -23,6 +23,7 @@ export interface Provider {
   name: string;
   description: string;
   tags: string[];
+  aliases: string[];
   lifecycle: Lifecycle;
   health: Health;
   last_checked_at: string | null;
@@ -80,14 +81,21 @@ export interface Stats {
   tributes: number;
 }
 
+export type SubmissionStatus = 'pending' | 'needs_info' | 'approved' | 'rejected';
+export type LeadKind = 'website' | 'abnormal' | 'evidence' | 'review';
+export interface LeadInput { kind: LeadKind; body: string; website?: string; evidenceUrls?: string[]; }
 export interface MySubmission {
   id: string;
   name: string;
-  status: 'pending' | 'approved' | 'rejected';
+  status: SubmissionStatus;
   reason: string | null;
   provider_id: string | null;
   created_at: string;
   reviewed_at: string | null;
+  kind: 'provider' | LeadKind;
+  provider: { name: string; description: string; tags: string[]; report?: { kind: LeadKind; body: string; evidenceUrls: string[] } };
+  websites: { url: string; label: string }[];
+  subscription_count: number;
 }
 
 export interface EndpointInput {
@@ -99,6 +107,7 @@ export interface EndpointInput {
 export interface ProviderInput {
   name: string;
   slug: string;
+  aliases?: string[];
   description?: string;
   tags?: string[];
   endpoints: EndpointInput[];
@@ -125,9 +134,13 @@ export interface AdminEndpoint {
 export interface AdminSubmission {
   id: string;
   user_id: string;
-  provider: { name: string; slug: string; description: string; tags: string[] };
+  kind: 'provider' | LeadKind;
+  provider_id: string | null;
+  websites: { url: string; label: string }[];
+  subscription_count: number;
+  provider: { name: string; slug: string; description: string; tags: string[]; report?: { kind: LeadKind; body: string; evidenceUrls: string[] } };
   endpoint_count: number;
-  status: 'pending' | 'approved' | 'rejected';
+  status: SubmissionStatus;
   reason: string | null;
   created_at: string;
 }

@@ -67,6 +67,8 @@ export function miniAppPath(payload: string | null): string | undefined {
       return undefined;
     }
   }
+  const report = /^report_([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$/.exec(payload);
+  if (report) return `/submit?provider=${report.slice(1).join('-')}`;
   const match =
     /^([pism])_([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$/.exec(payload);
   if (!match) return undefined;

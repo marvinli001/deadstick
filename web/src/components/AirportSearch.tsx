@@ -1,6 +1,7 @@
 import { useEffect, useId, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { SearchField } from '@/components/arc/search-field/search-field';
+import { safeSearchTerm } from '@/lib/submissionDraft';
 import { useProviders } from '@/lib/queries';
 import { LifecycleMark } from './marks';
 import styles from './AirportSearch.module.css';
@@ -16,7 +17,7 @@ export function useDebounced<T>(value: T, delay = 220) {
 
 export function AirportSearch({ autoFocus = false }: { autoFocus?: boolean }) {
   const [q, setQ] = useState('');
-  const term = useDebounced(q.trim());
+  const term = useDebounced(safeSearchTerm(q));
   const navigate = useNavigate();
   const listId = useId();
   const results = useProviders({ q: term, limit: 6 }, term.length > 0);
@@ -28,7 +29,7 @@ export function AirportSearch({ autoFocus = false }: { autoFocus?: boolean }) {
       role="search"
       onSubmit={(event) => {
         event.preventDefault();
-        if (q.trim()) navigate(`/airports?q=${encodeURIComponent(q.trim())}`);
+        if (q.trim()) navigate(`/airports?q=${encodeURIComponent(safeSearchTerm(q))}`);
       }}
     >
       <SearchField
@@ -51,7 +52,7 @@ export function AirportSearch({ autoFocus = false }: { autoFocus?: boolean }) {
               </Link>
             </li>
           ))}
-          {items.length === 0 && <li className={styles.none}>没有收录</li>}
+          {items.length === 0 && <li className={styles.none}><Link to={`/submit?q=${encodeURIComponent(term)}`}>没有收录，去投稿</Link></li>}
         </ul>
       )}
     </form>

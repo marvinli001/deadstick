@@ -8,6 +8,7 @@ import { useDebounced } from '@/components/AirportSearch';
 import { HealthMark, LifecycleMark } from '@/components/marks';
 import { Empty, ErrorView, Loading } from '@/components/states';
 import { ago, count } from '@/lib/format';
+import { safeSearchTerm } from '@/lib/submissionDraft';
 import { useProviders } from '@/lib/queries';
 import type { Lifecycle } from '@/lib/types';
 import styles from './Airports.module.css';
@@ -22,8 +23,8 @@ const lifecycles = [
 
 export default function Airports() {
   const [params, setParams] = useSearchParams();
-  const [q, setQ] = useState(params.get('q') ?? '');
-  const term = useDebounced(q.trim());
+  const [q, setQ] = useState(safeSearchTerm(params.get('q') ?? ''));
+  const term = useDebounced(safeSearchTerm(q));
   const lifecycle = (params.get('lifecycle') as Lifecycle | null) ?? undefined;
   const tag = params.get('tag') ?? undefined;
   const page = Math.max(1, Number(params.get('page')) || 1);
@@ -60,7 +61,7 @@ export default function Airports() {
         <div className={styles.search}>
           <SearchField
             label="搜机场"
-            placeholder="名称或标识"
+            placeholder="名称、旧名或官网"
             value={q}
             onValueChange={setQ}
             autoComplete="off"
@@ -88,7 +89,7 @@ export default function Airports() {
       ) : providers.isError ? (
         <ErrorView error={providers.error} onRetry={() => providers.refetch()} />
       ) : items.length === 0 ? (
-        <Empty title={term || tag || lifecycle ? '没有符合的机场' : '还没有收录'} />
+        <Empty title={term || tag || lifecycle ? '没有符合的机场' : '还没有收录'} action={<Link to={`/submit${term ? `?q=${encodeURIComponent(term)}` : ''}`}>去投稿</Link>} />
       ) : (
         <ul className={styles.list}>
           {items.map((item) => (

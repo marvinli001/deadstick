@@ -18,6 +18,7 @@ export const ProviderInput = Type.Object(
   {
     name: Type.String({ minLength: 1, maxLength: 120 }),
     slug: Type.String({ minLength: 2, maxLength: 80, pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$' }),
+    aliases: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 120 }), { maxItems: 20, uniqueItems: true })),
     description: Type.Optional(Type.String({ maxLength: 4000 })),
     tags: Type.Optional(
       Type.Array(Type.String({ minLength: 1, maxLength: 40 }), { maxItems: 10, uniqueItems: true }),
@@ -27,6 +28,27 @@ export const ProviderInput = Type.Object(
   { additionalProperties: false },
 );
 export type ProviderInput = Static<typeof ProviderInput>;
+export const SubmissionInput = Type.Object(
+  { ...Type.Omit(ProviderInput, ['slug', 'aliases']).properties,
+    slug: Type.Optional(ProviderInput.properties.slug) },
+  { additionalProperties: false },
+);
+export type SubmissionInput = Static<typeof SubmissionInput>;
+export const LeadKind = Type.Union([
+  Type.Literal('website'), Type.Literal('abnormal'), Type.Literal('evidence'), Type.Literal('review'),
+]);
+export const LeadInput = Type.Object({
+  kind: LeadKind,
+  body: Type.String({ minLength: 3, maxLength: 2000 }),
+  website: Type.Optional(Type.String({ format: 'uri', maxLength: 4096 })),
+  evidenceUrls: Type.Optional(Type.Array(Type.String({ format: 'uri', maxLength: 2048 }), { maxItems: 10 })),
+}, { additionalProperties: false });
+export type LeadInput = Static<typeof LeadInput>;
+export const SubmissionReview = Type.Union([
+  Type.Object({ approve: Type.Boolean(), reason: Type.String({ minLength: 1, maxLength: 1000 }) }, { additionalProperties: false }),
+  Type.Object({ action: Type.Union([Type.Literal('approved'), Type.Literal('rejected'), Type.Literal('needs_info')]), reason: Type.String({ minLength: 1, maxLength: 1000 }) }, { additionalProperties: false }),
+]);
+export type SubmissionReview = Static<typeof SubmissionReview>;
 export const MonitorSettings = Type.Object(
   {
     intervalHours: Type.Integer({ minimum: 1, maximum: 168 }),
