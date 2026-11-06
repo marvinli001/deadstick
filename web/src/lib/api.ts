@@ -66,6 +66,9 @@ async function parse<T>(response: Response): Promise<T> {
 }
 
 const messages: Record<string, string> = {
+  OAUTH_EXPIRED: '授权链接已过期，请回到客户端重新连接',
+  ENDPOINT_LIMIT: '每个机场最多 30 个地址',
+  ENDPOINT_REQUIRED: '至少保留一个地址',
   INVALID_CREDENTIALS: '邮箱或密码不对',
   CONFLICT: '已存在',
   VALIDATION: '格式不对',

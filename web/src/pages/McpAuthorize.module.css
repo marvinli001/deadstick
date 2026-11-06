@@ -1,0 +1,104 @@
+.page {
+  display: grid;
+  place-items: start center;
+  flex: 1;
+  padding: clamp(32px, 7vh, 80px) 20px 64px;
+}
+
+.panel {
+  width: 100%;
+  max-width: 520px;
+  min-width: 0;
+}
+
+.panel h1 {
+  padding-bottom: 20px;
+  margin-bottom: 28px;
+  border-bottom: 3px solid var(--ink);
+  font-size: clamp(32px, 6vw, 44px);
+  line-height: 1.2;
+}
+
+.client {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  font-size: 20px;
+  overflow-wrap: anywhere;
+}
+
+.client span:last-child {
+  font-size: 16px;
+  letter-spacing: 0.08em;
+}
+
+.identity {
+  margin-top: 16px;
+  color: var(--ink-3);
+  font-size: 14px;
+}
+
+.identity strong {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.permissions {
+  display: grid;
+  gap: 18px;
+  margin: 28px 0 20px;
+  padding-top: 24px;
+  border-top: 1px solid var(--rule);
+}
+
+.permissions > div {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 16px;
+}
+
+.permissions dt {
+  color: var(--ink-3);
+}
+
+.permissions dd {
+  margin: 0;
+}
+
+.exclusion {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.callback {
+  margin: 28px 0;
+  padding: 14px 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink-3);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.callback span {
+  margin-left: 12px;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.foot {
+  margin-top: 20px;
+  color: var(--ink-3);
+  font-size: 12px;
+}

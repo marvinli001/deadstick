@@ -20,6 +20,11 @@ import { telegramRoutes } from './telegram/routes.js';
 import { telegramSender, TelegramError, type TelegramSender } from './telegram/notifications.js';
 import { telegramConfig } from './telegram/settings.js';
 import { groupSettingsRoutes } from './telegram/group-settings.js';
+import { mcpProtocolPaths, OAuthError } from './mcp/access.js';
+import { oauthRoutes } from './mcp/oauth.js';
+import { mcpRoutes } from './mcp/routes.js';
+import { managementRoutes } from './mcp/management.js';
+import { mcpAllows } from './mcp/tools.js';
 
 const staticPath = /^\/(?:(?:assets|fonts)\/|favicon\.svg(?:\?|$))/;
 
@@ -102,6 +107,15 @@ export async function buildApp(
   app.decorateRequest('sessionHash', null);
   app.decorateRequest('csrfToken', null);
   app.addHook('onRequest', async (req) => {
+    const path = req.url.split('?')[0]!;
+    if (
+      req.headers.authorization?.startsWith('Bearer dsmcp_') &&
+      path !== '/mcp' &&
+      !mcpProtocolPaths.has(path) &&
+      !path.startsWith('/.well-known/') &&
+      !mcpAllows(req.method, req.routeOptions.url ?? '')
+    )
+      throw new AppError(403, 'FORBIDDEN', 'This route is not available to MCP connections');
     if (!staticPath.test(req.url) && !req.url.startsWith('/health/'))
       Object.assign(config, await telegramConfig(db, defaults));
   });
@@ -111,11 +125,29 @@ export async function buildApp(
   });
   app.addHook('onSend', async (req, reply, payload) => {
     if (staticPath.test(req.url)) return payload;
+    const path = req.url.split('?')[0]!;
+    if (mcpProtocolPaths.has(path) || path.startsWith('/.well-known/oauth-')) {
+      reply.header('Access-Control-Allow-Origin', '*');
+      reply.removeHeader('Access-Control-Allow-Credentials');
+    }
+    if (path.startsWith('/oauth/') || path === '/mcp' || path === '/mcp/authorize')
+      reply.header('Cache-Control', 'no-store').header('Referrer-Policy', 'no-referrer');
+    if (path === '/mcp/authorize' || path.startsWith('/oauth/'))
+      reply
+        .header('X-Frame-Options', 'DENY')
+        .header(
+          'Content-Security-Policy',
+          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+        );
     if (req.user || req.url.startsWith('/auth/') || req.url.startsWith('/admin/'))
       reply.header('Cache-Control', 'no-store');
     return payload;
   });
   app.setErrorHandler((error, req, reply) => {
+    if (error instanceof OAuthError)
+      return reply
+        .code(error.statusCode)
+        .send({ error: error.code, error_description: error.message });
     if (error instanceof AppError)
       return reply
         .code(error.statusCode)
@@ -170,6 +202,9 @@ export async function buildApp(
   adminRoutes(app, db, config, sender);
   telegramRoutes(app, db, config, sender);
   groupSettingsRoutes(app, db, sender);
+  managementRoutes(app, db, config);
+  oauthRoutes(app, db, config);
+  mcpRoutes(app, db, config);
   app.get('/openapi.json', { schema: { hide: true } }, async () => app.swagger());
   if (existsSync(join(config.webDist, 'index.html'))) {
     await app.register(fastifyStatic, {

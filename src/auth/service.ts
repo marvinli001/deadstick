@@ -3,6 +3,7 @@ import type { DB } from '../db.js';
 import type { Config } from '../config.js';
 import { digest, equal, token } from '../crypto.js';
 import { AppError } from '../errors.js';
+import { mcpIdentity, mcpProtocolPaths } from '../mcp/access.js';
 
 export interface User {
   id: string;
@@ -52,9 +53,17 @@ export function authHook(db: DB, config: Config) {
     request.user = null;
     request.sessionHash = null;
     request.csrfToken = null;
+    const path = request.url.split('?')[0]!;
+    if (path === '/mcp' || mcpProtocolPaths.has(path) || path.startsWith('/.well-known/')) return;
     const bearer = request.headers.authorization?.startsWith('Bearer ')
       ? request.headers.authorization.slice(7)
       : undefined;
+    if (bearer?.startsWith('dsmcp_')) {
+      const identity = await mcpIdentity(db, bearer, `${config.publicUrl}/mcp`);
+      if (!identity) throw new AppError(401, 'UNAUTHORIZED', 'MCP connection expired or revoked');
+      request.user = identity;
+      return;
+    }
     const session = bearer ?? request.cookies.session;
     if (session) {
       const [row] = await db.query<User & { csrf_token: string }>(

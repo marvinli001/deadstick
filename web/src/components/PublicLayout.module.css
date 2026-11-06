@@ -1,51 +1,118 @@
 .miniPage {
+  --tabbar-height: 72px;
+  --tabbar-gap: 12px;
+  --bottom-inset: calc(
+    var(--tg-safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)) +
+      var(--tg-content-safe-area-inset-bottom, 0px)
+  );
   min-height: var(--tg-viewport-stable-height, 100dvh);
   display: flex;
   flex-direction: column;
+  overflow-x: clip;
   padding-top: calc(
     var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px)
   );
   padding-right: var(--tg-safe-area-inset-right, 0px);
   padding-left: var(--tg-safe-area-inset-left, 0px);
-  padding-bottom: calc(
-    66px + var(--tg-safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)) +
-      var(--tg-content-safe-area-inset-bottom, 0px)
-  );
+  padding-bottom: calc(var(--tabbar-height) + var(--tabbar-gap) + var(--bottom-inset) + 16px);
 }
 
 .tabs {
   position: fixed;
   z-index: 30;
-  bottom: 0;
-  left: 0;
-  right: 0;
+  bottom: calc(var(--tabbar-gap) + var(--bottom-inset));
+  left: max(14px, var(--tg-safe-area-inset-left, 0px));
+  right: max(14px, var(--tg-safe-area-inset-right, 0px));
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  min-height: 66px;
-  padding: 8px 12px
-    calc(
-      8px + var(--tg-safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)) +
-        var(--tg-content-safe-area-inset-bottom, 0px)
-    );
-  border-top: 1px solid var(--rule);
-  background: var(--paper);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 2px;
+  max-width: 400px;
+  min-height: var(--tabbar-height);
+  margin-inline: auto;
+  padding: 6px;
+  isolation: isolate;
+  border: 1px solid color-mix(in srgb, var(--paper) 80%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--paper) 82%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  backdrop-filter: blur(24px) saturate(1.6);
+  box-shadow:
+    0 8px 32px color-mix(in srgb, var(--ink) 10%, transparent),
+    0 1px 5px color-mix(in srgb, var(--ink) 6%, transparent),
+    inset 0 1px 0 var(--paper),
+    inset 0 0 0 1px color-mix(in srgb, var(--ink) 4%, transparent);
 }
 
 .tabs a {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 58px;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--ink-3);
+  text-decoration: none;
+  font-size: 11px;
+  font-weight: 500;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.tabContent {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  min-height: 48px;
-  color: var(--ink-3);
-  text-decoration: none;
-  font-size: 12px;
+  gap: 3px;
+  pointer-events: none;
 }
 
 .tabs a.selected {
   color: var(--ink);
+}
+
+.tabs a:focus-visible {
+  outline-offset: -3px;
+}
+
+.tabSelection {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
   background: var(--chry-wash);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--paper) 70%, transparent);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .tabs a {
+    transition: color var(--duration-fast) var(--ease-standard);
+  }
+
+  .tabContent {
+    transition: transform var(--duration-fast) var(--ease-standard);
+  }
+
+  .tabs a:active .tabContent {
+    transform: scale(0.94);
+  }
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .tabs {
+    background: var(--paper);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .tabs {
+    border-color: var(--rule);
+    background: var(--paper);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }
 
 .page {

@@ -8,6 +8,7 @@ import {
   Inbox,
   ListChecks,
   MessageSquare,
+  Plug,
   Plane,
   Send,
   Settings2,
@@ -32,6 +33,7 @@ import Settings from './Settings';
 import Notifications from './Notifications';
 import Audit from './Audit';
 import Telegram from './Telegram';
+import Mcp from './Mcp';
 import styles from './console.module.css';
 
 const icon = (Icon: typeof Gauge) => <Icon size={17} strokeWidth={1.75} aria-hidden="true" />;
@@ -65,6 +67,7 @@ const system: Item[] = [
   { to: '/console/settings', label: '设置', icon: icon(Settings2) },
   { to: '/console/notifications', label: '通知', icon: icon(Bell) },
   { to: '/console/audit', label: '审计', icon: icon(FileClock) },
+  { to: '/console/mcp', label: 'MCP', icon: icon(Plug) },
   { to: '/console/telegram', label: 'Telegram', icon: icon(Send) },
 ];
 
@@ -154,6 +157,14 @@ export default function Console() {
               element={
                 <AdminOnly>
                   <Audit />
+                </AdminOnly>
+              }
+            />
+            <Route
+              path="mcp"
+              element={
+                <AdminOnly>
+                  <Mcp />
                 </AdminOnly>
               }
             />

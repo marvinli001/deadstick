@@ -34,17 +34,26 @@ export async function claimChecks(db: DB, limit: number) {
   await db.query(
     "UPDATE check_jobs SET status='failed',finished_at=now(),error_code='RETRIES_EXHAUSTED' WHERE attempts>=3 AND (status='pending' OR status='running' AND lease_until<now())",
   );
-  return db.query<{ id: string; provider_id: string; lease_token: string; attempts: number }>(
-    `WITH picked AS (
-    SELECT candidate.id FROM providers p CROSS JOIN LATERAL (
+  return db.transaction(async (tx) => {
+    const picked = await tx.query<{ id: string }>(
+      `SELECT candidate.id FROM providers p CROSS JOIN LATERAL (
       SELECT j.id,j.available_at FROM check_jobs j WHERE j.provider_id=p.id AND j.attempts<3 AND j.available_at<=now()
       AND (j.status='pending' OR j.status='running' AND j.lease_until<now())
       AND NOT EXISTS(SELECT 1 FROM check_jobs running WHERE running.provider_id=p.id AND running.id<>j.id AND running.status='running' AND running.lease_until>now())
       ORDER BY j.available_at,j.created_at LIMIT 1
-    ) candidate ORDER BY candidate.available_at,p.id LIMIT $1 FOR UPDATE OF p SKIP LOCKED
-  ) UPDATE check_jobs j SET status='running',attempts=attempts+1,lease_token=gen_random_uuid(),lease_until=now()+interval '30 minutes' FROM picked WHERE j.id=picked.id RETURNING j.*`,
-    [limit],
-  );
+    ) candidate ORDER BY candidate.available_at,p.id LIMIT $1 FOR UPDATE OF p SKIP LOCKED`,
+      [limit],
+    );
+    // Keep provider locks while rechecking jobs in a fresh READ COMMITTED snapshot.
+    return tx.query<{ id: string; provider_id: string; lease_token: string; attempts: number }>(
+      `UPDATE check_jobs j SET status='running',attempts=attempts+1,lease_token=gen_random_uuid(),lease_until=now()+interval '30 minutes'
+      WHERE j.id=ANY($1::uuid[]) AND j.attempts<3 AND j.available_at<=now()
+      AND (j.status='pending' OR j.status='running' AND j.lease_until<now())
+      AND NOT EXISTS(SELECT 1 FROM check_jobs running WHERE running.provider_id=j.provider_id AND running.id<>j.id AND running.status='running' AND running.lease_until>now())
+      RETURNING j.*`,
+      [picked.map((job) => job.id)],
+    );
+  });
 }
 export type CheckJob = Awaited<ReturnType<typeof claimChecks>>[number];
 export async function runCheck(
@@ -165,6 +174,14 @@ export async function cleanup(db: DB, retentionDays: number) {
   await db.query('DELETE FROM auth_challenges WHERE expires_at<now()');
   await db.query('DELETE FROM auth_replays WHERE expires_at<now()');
   await db.query('DELETE FROM bot_conversations WHERE expires_at<now()');
+  await db.query('DELETE FROM mcp_authorizations WHERE expires_at<now()');
+  await db.query('DELETE FROM mcp_codes WHERE expires_at<now()');
+  await db.query(
+    "DELETE FROM mcp_connections WHERE expires_at<now() OR revoked_at<now()-interval '30 days'",
+  );
+  await db.query(
+    "DELETE FROM mcp_clients WHERE created_at<now()-interval '30 days' AND NOT EXISTS (SELECT 1 FROM mcp_connections WHERE client_id=mcp_clients.id) AND NOT EXISTS (SELECT 1 FROM mcp_authorizations WHERE client_id=mcp_clients.id) AND NOT EXISTS (SELECT 1 FROM mcp_codes WHERE client_id=mcp_clients.id)",
+  );
   await db.query(
     "DELETE FROM check_jobs WHERE status IN ('done','failed') AND finished_at<now()-$1*interval '1 day'",
     [retentionDays],

@@ -30,8 +30,18 @@ export async function audit(
 }
 export function prepareProvider(input: ProviderInput, config: Config) {
   if (!input.name.trim()) throw new AppError(400, 'INVALID_NAME', 'Name required');
+  return {
+    name: input.name.trim(),
+    aliases: input.aliases?.map((alias) => alias.trim()).filter(Boolean) ?? [],
+    slug: input.slug,
+    description: input.description ?? '',
+    tags: input.tags ?? [],
+    endpoints: prepareEndpoints(input.endpoints, config),
+  };
+}
+export function prepareEndpoints(input: ProviderInput['endpoints'], config: Config) {
   const seen = new Set<string>();
-  const endpoints = input.endpoints.map((endpoint) => {
+  return input.map((endpoint) => {
     const url = validateUrl(endpoint.url);
     const key = `${endpoint.kind}:${url.href}`;
     if (seen.has(key)) throw new AppError(400, 'DUPLICATE_ENDPOINT', 'Duplicate endpoint');
@@ -44,14 +54,6 @@ export function prepareProvider(input: ProviderInput, config: Config) {
       url_ciphertext: encrypt(url.href, config.appKey),
     };
   });
-  return {
-    name: input.name.trim(),
-    aliases: input.aliases?.map((alias) => alias.trim()).filter(Boolean) ?? [],
-    slug: input.slug,
-    description: input.description ?? '',
-    tags: input.tags ?? [],
-    endpoints,
-  };
 }
 export type PreparedProvider = ReturnType<typeof prepareProvider>;
 export async function insertEndpoints(

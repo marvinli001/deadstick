@@ -361,6 +361,10 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
           req.params.id,
         ]);
         await tx.query('DELETE FROM sessions WHERE user_id=$1', [req.params.id]);
+        await tx.query(
+          'UPDATE mcp_connections SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL',
+          [req.params.id],
+        );
         if (user.telegram_id && config.botToken)
           await enqueue(tx, `commands:${token()}`, user.telegram_id, {}, null, {
             method: 'setMyCommands',

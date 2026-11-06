@@ -1,9 +1,9 @@
-import { createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomInt, randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { Headers } from 'undici';
 import { beforeAll, beforeEach, afterAll, describe, it, expect, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { database } from '../src/db.js';
+import { database, type DB } from '../src/db.js';
 import { migrate } from '../src/migrate.js';
 import { loadConfig } from '../src/config.js';
 import { buildApp } from '../src/app.js';
@@ -499,13 +499,132 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       "UPDATE check_jobs SET lease_until=now()-interval '1 second' WHERE id=$1",
       [first.id],
     );
-    const reclaimed = await claimChecks(storage.db, 4);
+    const reclaimed = (
+      await Promise.all(Array.from({ length: 4 }, () => claimChecks(storage.db, 4)))
+    ).flat();
     expect(reclaimed).toHaveLength(1);
+    expect(reclaimed[0]).toMatchObject({ id: first.id, attempts: first.attempts + 1 });
     expect(reclaimed[0]!.lease_token).not.toBe(first.lease_token);
     await runCheck(storage.db, config, first, settings, fakeCheck(false));
     expect(await storage.db.query('SELECT * FROM check_runs')).toHaveLength(0);
     await runCheck(storage.db, config, reclaimed[0]!, settings, fakeCheck(true));
     expect(await storage.db.query('SELECT * FROM check_runs')).toHaveLength(1);
+  });
+  it.each([false, true])(
+    'preserves a valid lease with a stale claim snapshot (different job: %s)',
+    async (differentJob) => {
+      const p = await provider();
+      const jobs = await storage.db.query<{ id: string }>(
+        "INSERT INTO check_jobs(provider_id,dedupe_key,available_at) VALUES ($1,'snapshot-first',now()-interval '1 minute'),($1,'snapshot-second',now()) RETURNING id",
+        [p.id],
+      );
+      const gate = randomInt(1, 2 ** 31);
+      function paused(db: DB): DB {
+        return {
+          query: (text, values) =>
+            db.query(
+              // LIMIT is evaluated after the snapshot is taken, before provider rows are locked.
+              text.replace(
+                'LIMIT $1',
+                `LIMIT (SELECT $1::int FROM pg_advisory_xact_lock(${gate}::bigint))`,
+              ),
+              values,
+            ),
+          transaction: (fn) => db.transaction((tx) => fn(paused(tx))),
+        };
+      }
+      let blocked: ReturnType<typeof claimChecks> = Promise.resolve([]);
+      const fresh = await storage.db
+        .transaction(async (tx) => {
+          await tx.query('SELECT pg_advisory_xact_lock($1::bigint)', [gate]);
+          blocked = claimChecks(paused(storage.db), 4);
+          await vi.waitFor(async () => {
+            expect(
+              await storage.db.query(
+                "SELECT pid FROM pg_locks WHERE locktype='advisory' AND classid=0 AND objid=$1 AND NOT granted",
+                [gate],
+              ),
+            ).toHaveLength(1);
+          });
+          if (differentJob)
+            await storage.db.query(
+              "UPDATE check_jobs SET available_at=now()-interval '2 minutes' WHERE id=$1",
+              [jobs[1]!.id],
+            );
+          return claimChecks(storage.db, 4);
+        })
+        .finally(async () => {
+          await blocked;
+        });
+      const stale = await blocked;
+      expect(fresh).toHaveLength(1);
+      expect(fresh[0]!.id).toBe(jobs[differentJob ? 1 : 0]!.id);
+      expect(stale, JSON.stringify({ fresh, stale })).toEqual([]);
+      expect(
+        await storage.db.query(
+          "SELECT id,lease_token,attempts FROM check_jobs WHERE status='running' AND lease_until>now()",
+        ),
+      ).toEqual([{ id: fresh[0]!.id, lease_token: fresh[0]!.lease_token, attempts: 1 }]);
+    },
+  );
+  it('skips locked providers and claims one job per unlocked provider across workers', async () => {
+    const providers = await storage.db.query<{ id: string }>(
+      "INSERT INTO providers(slug,name) SELECT 'worker-'||n,'Worker '||n FROM generate_series(1,4) n RETURNING id",
+    );
+    await storage.db.query(
+      "INSERT INTO check_jobs(provider_id,dedupe_key) SELECT id,id::text||':'||n FROM providers CROSS JOIN generate_series(1,3) n",
+    );
+    const claimed = await storage.db.transaction(async (tx) => {
+      await tx.query('SELECT id FROM providers WHERE id=$1 FOR UPDATE', [providers[0]!.id]);
+      const batches = await Promise.all(
+        Array.from({ length: 4 }, () => claimChecks(storage.db, 4)),
+      );
+      const jobs = batches.flat();
+      expect(jobs).toHaveLength(3);
+      expect(new Set(jobs.map((job) => job.provider_id)).size).toBe(3);
+      expect(jobs.map((job) => job.provider_id)).not.toContain(providers[0]!.id);
+      return jobs;
+    });
+    const remaining = await claimChecks(storage.db, 2);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]!.provider_id).toBe(providers[0]!.id);
+    expect(new Set([...claimed, ...remaining].map((job) => job.id)).size).toBe(4);
+    expect(await claimChecks(storage.db, 4)).toEqual([]);
+  });
+  it('keeps the final attempt leased until expiry and then advances to the next job', async () => {
+    const p = await provider();
+    const [active] = await storage.db.query<{ id: string; lease_token: string }>(
+      "INSERT INTO check_jobs(provider_id,dedupe_key,status,attempts,lease_token,lease_until) VALUES ($1,'final-attempt','running',3,gen_random_uuid(),now()+interval '30 minutes') RETURNING id,lease_token",
+      [p.id],
+    );
+    const [pending] = await storage.db.query<{ id: string }>(
+      "INSERT INTO check_jobs(provider_id,dedupe_key) VALUES ($1,'after-final-attempt') RETURNING id",
+      [p.id],
+    );
+    expect(
+      (await Promise.all([claimChecks(storage.db, 4), claimChecks(storage.db, 4)])).flat(),
+    ).toEqual([]);
+    expect(
+      (
+        await storage.db.query('SELECT status,attempts,lease_token FROM check_jobs WHERE id=$1', [
+          active!.id,
+        ])
+      )[0],
+    ).toEqual({ status: 'running', attempts: 3, lease_token: active!.lease_token });
+    await storage.db.query(
+      "UPDATE check_jobs SET lease_until=now()-interval '1 second' WHERE id=$1",
+      [active!.id],
+    );
+    const next = (
+      await Promise.all([claimChecks(storage.db, 4), claimChecks(storage.db, 4)])
+    ).flat();
+    expect(next).toHaveLength(1);
+    expect(next[0]).toMatchObject({ id: pending!.id, attempts: 1 });
+    expect(
+      (
+        await storage.db.query('SELECT status,error_code FROM check_jobs WHERE id=$1', [active!.id])
+      )[0],
+    ).toEqual({ status: 'failed', error_code: 'RETRIES_EXHAUSTED' });
   });
   it('does not skip the next due slot after an initial check in the same day', async () => {
     const p = await provider(),

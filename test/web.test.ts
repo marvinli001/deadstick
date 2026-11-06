@@ -66,6 +66,19 @@ describe('web and API on one origin', () => {
     expect(query).not.toHaveBeenCalled();
   });
 
+  it('serves the OAuth consent deep link without caching or framing', async () => {
+    const page = await app.inject({
+      url: '/mcp/authorize?request=test-request',
+      headers: { accept: 'text/html' },
+    });
+    expect(page.statusCode).toBe(200);
+    expect(page.body).toBe(html);
+    expect(page.headers['cache-control']).toBe('no-store');
+    expect(page.headers['x-frame-options']).toBe('DENY');
+    expect(page.headers['referrer-policy']).toBe('no-referrer');
+    expect(page.headers['content-security-policy']).toContain("frame-ancestors 'none'");
+  });
+
   it('preserves API errors and never sends HTML for JSON or mutation requests', async () => {
     const auth = await app.inject({ url: '/auth/me', headers: { accept: 'application/json' } });
     expect(auth.statusCode).toBe(401);

@@ -12,6 +12,7 @@ import Submit from '@/pages/Submit';
 import { GroupSettings, PersonalNotificationSettings } from '@/pages/NotificationSettings';
 import { Login, Register } from '@/pages/Auth';
 import NotFound from '@/pages/NotFound';
+import McpAuthorize from '@/pages/McpAuthorize';
 import { MeLayout, MeProfile, MeFollows, MeSubmissions, MeSecurity } from '@/pages/me';
 
 const Console = lazy(() => import('@/pages/console'));
@@ -50,6 +51,14 @@ export const router = createBrowserRouter([
       },
       { path: '/login', element: <Login /> },
       { path: '/register', element: <Register /> },
+      {
+        path: '/mcp/authorize',
+        element: (
+          <RequireUser>
+            <McpAuthorize />
+          </RequireUser>
+        ),
+      },
       {
         path: '/me',
         element: (

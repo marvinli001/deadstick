@@ -177,6 +177,10 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
           req.user!.id,
         ]);
         await tx.query('DELETE FROM sessions WHERE user_id=$1', [req.user!.id]);
+        await tx.query(
+          'UPDATE mcp_connections SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL',
+          [req.user!.id],
+        );
       });
       return newSession(db, config, reply, req.user!);
     },

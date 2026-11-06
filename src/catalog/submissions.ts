@@ -276,6 +276,43 @@ async function acceptLead(db: DB, config: Config, row: Submission, actorId: stri
   }
   return p;
 }
+export async function editSubmission(
+  db: DB,
+  config: Config,
+  id: string,
+  revision: number,
+  input: SubmissionInput | LeadInput,
+  actorId: string,
+) {
+  return db.transaction(async (tx) => {
+    await tx.query('SELECT pg_advisory_xact_lock(73912682)');
+    const row = required(
+      (await tx.query<Submission>('SELECT * FROM submissions WHERE id=$1 FOR UPDATE', [id]))[0],
+    );
+    if (row.revision !== revision)
+      throw new AppError(409, 'SUBMISSION_CHANGED', 'Submission changed');
+    if (!['pending', 'needs_info'].includes(row.status))
+      throw new AppError(409, 'ALREADY_REVIEWED', 'Submission already reviewed');
+    if ((row.kind === 'provider') === 'kind' in input)
+      throw new AppError(400, 'SUBMISSION_KIND', 'Submission kind mismatch');
+    const payload: SubmissionPayload =
+      'kind' in input
+        ? await prepareLead(tx, config, required(row.provider_id ?? undefined), input)
+        : prepareSubmission(input, config);
+    if (row.kind === 'provider') {
+      payload.slug = row.payload.slug;
+      if (!payload.endpoints.some((e) => e.kind === 'subscription'))
+        payload.endpoints.push(...row.payload.endpoints.filter((e) => e.kind === 'subscription'));
+      await checkDuplicate(tx, payload, id);
+    }
+    const [updated] = await tx.query<{ id: string; revision: number }>(
+      'UPDATE submissions SET payload=$1,kind=$2,revision=revision+1 WHERE id=$3 RETURNING id,revision',
+      [JSON.stringify(payload), payload.report?.kind ?? 'provider', id],
+    );
+    await audit(tx, actorId, 'submission.edit', id, { revision: updated!.revision });
+    return updated!;
+  });
+}
 export async function reviewSubmission(
   db: DB,
   config: Config,
