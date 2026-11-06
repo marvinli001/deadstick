@@ -1,7 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { safeProxyConfig } from '../src/monitor/proxy.js';
 import { parseSubscription } from '../src/monitor/subscription.js';
-import { summarize } from '../src/monitor/check.js';
 
 describe('proxy egress configuration', () => {
   it('pins the node IP and drops all untrusted routing and secondary destinations', () => {
@@ -60,20 +59,9 @@ describe('proxy egress configuration', () => {
       password: 'secret',
     });
   });
-  it('does not treat missing engine support as an airport outage', () => {
+  it('rejects nodes without a supported proxy configuration', () => {
     expect(() => safeProxyConfig({ host: 'node.example.com', port: 443 }, '1.1.1.1')).toThrow(
       'protocol',
     );
-    expect(
-      summarize([
-        {
-          endpointId: 'test',
-          kind: 'subscription',
-          ok: false,
-          latencyMs: 1,
-          errorCode: 'PROBE_ENGINE_ERROR',
-        },
-      ]).health,
-    ).toBe('unknown');
   });
 });

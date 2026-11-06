@@ -46,11 +46,12 @@ function Results({ run, endpoints }: { run: CheckRun; endpoints: AdminEndpoint[]
           {r.kind === 'website' ? '官网' : '订阅'} {hostOf(r.endpoint_id)} · {r.http_status ?? '—'}{' '}
           · {r.latency_ms}ms
           {r.error_code && ` · ${r.error_code}`}
-          {r.node_count !== null &&
-            ` · 节点 ${r.reachable_nodes ?? 0}/${r.sampled_nodes ?? 0}/${r.node_count}`}
+          {r.node_count !== null && ` · 节点 ${r.node_count}`}
+          {!!r.sampled_nodes && ` · 抽测 ${r.reachable_nodes ?? 0}/${r.sampled_nodes}（参考）`}
           {r.probe_mode && ` · ${r.probe_mode}`}
-          {r.subscription_expired && ' · 已过期'}
-          {r.quota_exhausted && ' · 流量用尽'}
+          {r.probe_error_code && ` · 抽测 ${r.probe_error_code}`}
+          {r.subscription_expired && ' · 检测账号已过期'}
+          {r.quota_exhausted && ' · 检测账号流量用尽'}
         </div>
       ))}
     </div>

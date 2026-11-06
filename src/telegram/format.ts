@@ -238,7 +238,7 @@ const probeLabels: Record<string, string> = { proxy: '真实出网', tcp: '端�
 /** Rich message (Bot API 10.1+) with a table, and the plain HTML fallback for older clients. */
 export function checkReport(p: ProviderView, runs: CheckRun[]) {
   const heading = `${providerTitle(p)} · 检测记录`;
-  const note = '自动检测只会把机场标为疑似跑路，确认跑路需要人工核验。';
+  const note = '订阅能获取节点即有效；节点抽测仅供参考，确认跑路仍需人工核验。';
   const rows = runs.map((r) => ({
     at: new Date(r.created_at),
     health: healthLabels[r.health] ?? r.health,

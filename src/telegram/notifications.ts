@@ -190,17 +190,18 @@ export async function notifyIncidentOpened(
   );
 }
 export async function notifyRecovery(db: DB, config: Config, p: ProviderRef, incidentId: string) {
+  const summary = '至少一项检测通过，本次异常自动关闭。';
   await clearReviewButtons(db, `incident:${incidentId}`);
   await broadcast(
     db,
     p.id,
     `recovery:${incidentId}`,
     {
-      text: `✅ <b>检测恢复</b>\n${headline(p)}\n网站和订阅已通过当前检测，本次异常自动关闭。`,
-      rich: noticeRich('✅ 检测恢复', p, '<p>网站和订阅已通过当前检测，本次异常自动关闭。</p>'),
+      text: `✅ <b>检测恢复</b>\n${headline(p)}\n${summary}`,
+      rich: noticeRich('✅ 检测恢复', p, `<p>${summary}</p>`),
       reply_markup: markup([detailRow(config, p)]),
     },
-    { type: 'recovery', incidentId, summary: '网站和订阅已通过当前检测，本次异常自动关闭。' },
+    { type: 'recovery', incidentId, summary },
   );
 }
 export async function notifyResolution(

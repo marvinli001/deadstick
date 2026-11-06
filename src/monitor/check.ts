@@ -24,6 +24,7 @@ export interface EndpointResult {
   subscriptionExpired?: boolean;
   quotaExhausted?: boolean;
   probeMode?: 'tcp' | 'proxy';
+  probeErrorCode?: string;
 }
 export type CheckEndpoint = (
   endpoint: Endpoint,
@@ -50,6 +51,7 @@ export function checker(config: Config): CheckEndpoint {
       else {
         const nodes = parseSubscription(response.body),
           limits = subscriptionLimits(response.headers.get('subscription-userinfo'));
+        result.ok = true;
         result.nodeCount = nodes.length;
         result.subscriptionExpired = limits.expired;
         result.quotaExhausted = limits.quotaExhausted;
@@ -95,14 +97,8 @@ export function checker(config: Config): CheckEndpoint {
           }
         }
         result.reachableNodes = reachable.filter(Boolean).length;
-        result.ok =
-          !limits.expired && !limits.quotaExhausted && (count === 0 || result.reachableNodes > 0);
-        if (!result.ok)
-          result.errorCode = limits.expired
-            ? 'SUBSCRIPTION_EXPIRED'
-            : limits.quotaExhausted
-              ? 'QUOTA_EXHAUSTED'
-              : (probeError ?? 'NODES_UNREACHABLE');
+        if (count > 0 && result.reachableNodes === 0)
+          result.probeErrorCode = probeError ?? 'NODES_UNREACHABLE';
       }
     } catch (error) {
       result.errorCode = networkError(error);
@@ -114,18 +110,11 @@ export function checker(config: Config): CheckEndpoint {
 export function summarize(results: EndpointResult[]) {
   const websites = results.filter((r) => r.kind === 'website'),
     subscriptions = results.filter((r) => r.kind === 'subscription');
-  const websiteUp = websites.length === 0 || websites.some((r) => r.ok),
-    subscriptionUp = subscriptions.length === 0 || subscriptions.some((r) => r.ok);
-  const inconclusive = results.some((r) =>
-    ['UNSUPPORTED_PROXY', 'PROBE_ENGINE_ERROR'].includes(r.errorCode ?? ''),
-  );
-  const health = inconclusive
-    ? 'unknown'
-    : !results.length || !websiteUp || !subscriptionUp
-      ? 'down'
-      : results.every((r) => r.ok)
-        ? 'healthy'
-        : 'degraded';
+  const health = !results.some((r) => r.ok)
+    ? 'down'
+    : results.every((r) => r.ok)
+      ? 'healthy'
+      : 'degraded';
   return {
     health,
     website: { total: websites.length, up: websites.filter((r) => r.ok).length },

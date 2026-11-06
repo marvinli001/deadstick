@@ -5,35 +5,43 @@
 }
 
 .cell {
+  display: flex;
+  flex-direction: column;
   width: 14px;
   height: 28px;
   padding: 0;
-  border: 1px solid var(--ink);
+  border: 0;
   background: var(--paper);
   cursor: default;
+}
+
+.part {
+  flex: 1;
+  width: 100%;
 }
 
 .cell[data-interactive] {
   cursor: pointer;
 }
 
-.cell[data-health='healthy'] {
-  background: var(--ink);
+.cell[data-health='healthy'],
+.part[data-health='healthy'] {
+  background: var(--jade);
 }
 
-.cell[data-health='degraded'] {
-  background: var(--chry);
-  border-color: var(--chry-ink);
+.cell[data-health='degraded'],
+.part[data-health='degraded'] {
+  background: linear-gradient(to bottom, var(--jade) 50%, var(--alarm) 50%);
 }
 
-.cell[data-health='down'] {
+.cell[data-health='down'],
+.part[data-health='down'] {
   background: var(--alarm);
-  border-color: var(--alarm);
 }
 
 .cell[data-health='unknown'] {
-  border-style: dashed;
-  border-color: var(--ink-3);
+  outline: 1px dashed var(--ink-3);
+  outline-offset: -1px;
 }
 
 .cell:hover {

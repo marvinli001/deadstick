@@ -197,6 +197,7 @@ export interface EndpointResult {
   subscription_expired: boolean | null;
   quota_exhausted: boolean | null;
   probe_mode: 'tcp' | 'proxy' | null;
+  probe_error_code: string | null;
 }
 
 export interface AdminMemorial {

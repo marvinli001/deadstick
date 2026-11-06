@@ -42,12 +42,13 @@
 }
 
 .health[data-value='healthy'] i {
-  background: var(--ink);
+  background: var(--jade);
+  border-color: var(--jade);
 }
 
 .health[data-value='degraded'] i {
-  background: linear-gradient(90deg, var(--chry) 50%, var(--paper) 50%);
-  border-color: var(--chry-ink);
+  background: linear-gradient(to bottom, var(--jade) 50%, var(--alarm) 50%);
+  border-color: transparent;
 }
 
 .health[data-value='down'] i {

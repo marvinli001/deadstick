@@ -38,29 +38,44 @@ beforeEach(() => {
     body: 'vless://first@one.example.com:443\nvless://second@two.example.com:443',
   });
 });
-it('requires actual egress success in proxy mode', async () => {
-  mocks.proxy.mockResolvedValue(false);
-  const result = await checker(config)(endpoint, settings);
-  expect(result).toMatchObject({
-    ok: false,
-    probeMode: 'proxy',
-    sampledNodes: 2,
-    reachableNodes: 0,
-    errorCode: 'NODES_UNREACHABLE',
-  });
-  expect(mocks.tcp).not.toHaveBeenCalled();
-});
+it.each(['proxy', 'tcp'] as const)(
+  'accepts parsed subscriptions when every %s node probe fails',
+  async (probeMode) => {
+    mocks.proxy.mockResolvedValue(false);
+    mocks.tcp.mockResolvedValue(false);
+    const result = await checker({ ...config, probeMode })(endpoint, settings);
+    expect(result).toMatchObject({
+      ok: true,
+      nodeCount: 2,
+      probeMode,
+      sampledNodes: 2,
+      reachableNodes: 0,
+      probeErrorCode: 'NODES_UNREACHABLE',
+    });
+    expect(result.errorCode).toBeUndefined();
+    expect(summarize([result])).toMatchObject({
+      health: 'healthy',
+      subscription: { total: 1, up: 1 },
+    });
+    expect(probeMode === 'proxy' ? mocks.tcp : mocks.proxy).not.toHaveBeenCalled();
+  },
+);
 it('accepts a usable sampled node even when a different protocol cannot be probed', async () => {
   mocks.proxy
     .mockRejectedValueOnce(new AppError(400, 'UNSUPPORTED_PROXY', 'Unsupported'))
     .mockResolvedValueOnce(true);
   expect(await checker(config)(endpoint, settings)).toMatchObject({ ok: true, reachableNodes: 1 });
 });
-it('preserves inconclusive engine failures', async () => {
-  mocks.proxy.mockRejectedValue(new AppError(503, 'PROBE_ENGINE_ERROR', 'Engine unavailable'));
-  const result = await checker(config)(endpoint, settings);
-  expect(summarize([result]).health).toBe('unknown');
-});
+it.each(['PROBE_ENGINE_ERROR', 'UNSUPPORTED_PROXY'])(
+  'keeps %s diagnostic without failing a valid subscription',
+  async (code) => {
+    mocks.proxy.mockRejectedValue(new AppError(503, code, 'Probe unavailable'));
+    const result = await checker(config)(endpoint, settings);
+    expect(result).toMatchObject({ ok: true, reachableNodes: 0, probeErrorCode: code });
+    expect(result.errorCode).toBeUndefined();
+    expect(summarize([result]).health).toBe('healthy');
+  },
+);
 it('does not claim a node probe ran when sampling is disabled', async () => {
   const result = await checker(config)(endpoint, { ...settings, nodeSampleSize: 0 });
   expect(result).toMatchObject({ ok: true, sampledNodes: 0 });
@@ -68,17 +83,54 @@ it('does not claim a node probe ran when sampling is disabled', async () => {
   expect(summarize([result]).nodeProbe).toBe('none');
   expect(mocks.proxy).not.toHaveBeenCalled();
 });
-it('detects expired credentials without probing nodes', async () => {
+it.each([
+  { header: 'expire=1', expired: true, quotaExhausted: false },
+  { header: 'upload=4;download=6;total=10', expired: false, quotaExhausted: true },
+])('records account limits without failing parsed nodes: $header', async (limits) => {
   mocks.fetch.mockResolvedValue({
     status: 200,
-    headers: new Headers({ 'subscription-userinfo': 'expire=1' }),
+    headers: new Headers({ 'subscription-userinfo': limits.header }),
+    body: 'vless://id@node.example.com:443',
+  });
+  const result = await checker(config)(endpoint, settings);
+  expect(result).toMatchObject({
+    ok: true,
+    nodeCount: 1,
+    subscriptionExpired: limits.expired,
+    quotaExhausted: limits.quotaExhausted,
+    sampledNodes: 0,
+  });
+  expect(result.errorCode).toBeUndefined();
+  expect(summarize([result]).health).toBe('healthy');
+  expect(mocks.proxy).not.toHaveBeenCalled();
+});
+it.each(['', '<html>Login required</html>', 'proxies: []', 'not a subscription'])(
+  'rejects a successful HTTP response without parseable nodes: %j',
+  async (body) => {
+    mocks.fetch.mockResolvedValue({ status: 200, headers: new Headers(), body });
+    const result = await checker(config)(endpoint, settings);
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_SUBSCRIPTION' });
+    expect(summarize([result]).health).toBe('down');
+    expect(mocks.proxy).not.toHaveBeenCalled();
+  },
+);
+it('rejects HTTP failures even if the response contains nodes', async () => {
+  mocks.fetch.mockResolvedValue({
+    status: 403,
+    headers: new Headers(),
     body: 'vless://id@node.example.com:443',
   });
   expect(await checker(config)(endpoint, settings)).toMatchObject({
     ok: false,
-    subscriptionExpired: true,
-    errorCode: 'SUBSCRIPTION_EXPIRED',
-    sampledNodes: 0,
+    errorCode: 'HTTP_403',
+  });
+  expect(mocks.proxy).not.toHaveBeenCalled();
+});
+it('rejects subscription download failures', async () => {
+  mocks.fetch.mockRejectedValue(new DOMException('Timed out', 'TimeoutError'));
+  expect(await checker(config)(endpoint, settings)).toMatchObject({
+    ok: false,
+    errorCode: 'TIMEOUT',
   });
   expect(mocks.proxy).not.toHaveBeenCalled();
 });

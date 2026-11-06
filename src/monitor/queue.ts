@@ -104,7 +104,7 @@ export async function runCheck(
       );
       for (const r of results)
         await tx.query(
-          'INSERT INTO endpoint_results(run_id,endpoint_id,kind,ok,http_status,latency_ms,error_code,node_count,reachable_nodes,sampled_nodes,subscription_expired,quota_exhausted,probe_mode) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)',
+          'INSERT INTO endpoint_results(run_id,endpoint_id,kind,ok,http_status,latency_ms,error_code,node_count,reachable_nodes,sampled_nodes,subscription_expired,quota_exhausted,probe_mode,probe_error_code) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',
           [
             run!.id,
             r.endpointId,
@@ -119,25 +119,16 @@ export async function runCheck(
             r.subscriptionExpired ?? null,
             r.quotaExhausted ?? null,
             r.probeMode ?? null,
+            r.probeErrorCode ?? null,
           ],
         );
-      const streak =
-        summary.health === 'unknown'
-          ? current.failure_streak
-          : summary.health === 'down'
-            ? current.failure_streak + 1
-            : 0;
+      const streak = summary.health === 'down' ? current.failure_streak + 1 : 0;
       const suspected = streak >= settings.failureThreshold;
       await tx.query(
         "UPDATE providers SET health=$1,failure_streak=$2,lifecycle=CASE WHEN $3::text='active' AND EXISTS(SELECT 1 FROM incidents WHERE provider_id=$4 AND status='open' AND manual_review) THEN 'suspected' ELSE $3 END,last_checked_at=now(),updated_at=now() WHERE id=$4",
-        [
-          summary.health,
-          streak,
-          summary.health === 'unknown' ? current.lifecycle : suspected ? 'suspected' : 'active',
-          provider.id,
-        ],
+        [summary.health, streak, suspected ? 'suspected' : 'active', provider.id],
       );
-      if (suspected && summary.health !== 'unknown') {
+      if (suspected) {
         const [incident] = await tx.query<{ id: string }>(
           "INSERT INTO incidents(provider_id,summary) VALUES ($1,$2) ON CONFLICT (provider_id) WHERE status='open' DO NOTHING RETURNING id",
           [provider.id, `连续 ${streak} 次检测异常；等待人工二次核验`],

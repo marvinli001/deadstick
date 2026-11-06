@@ -111,11 +111,33 @@ describe('subscription parsing', () => {
     });
     expect(subscriptionLimits(null)).toEqual({ expired: false, quotaExhausted: false });
   });
-  it('keeps partial failures separate from total outages', () => {
-    const r = { endpointId: 'x', kind: 'website' as const, ok: true, latencyMs: 1 };
-    expect(summarize([r, { ...r, ok: false }]).health).toBe('degraded');
-    expect(summarize([r, { ...r, kind: 'subscription', ok: false }]).health).toBe('down');
-    expect(summarize([]).health).toBe('down');
+});
+describe('health aggregation', () => {
+  it.each([
+    { website: [true], subscription: [true], health: 'healthy' },
+    { website: [true], subscription: [false], health: 'degraded' },
+    { website: [false], subscription: [true], health: 'degraded' },
+    { website: [true, false], subscription: [], health: 'degraded' },
+    { website: [false], subscription: [false], health: 'down' },
+    { website: [false], subscription: [], health: 'down' },
+    { website: [], subscription: [false], health: 'down' },
+    { website: [], subscription: [true], health: 'healthy' },
+    { website: [], subscription: [], health: 'down' },
+  ])('summarizes $website / $subscription as $health', ({ website, subscription, health }) => {
+    const results = [
+      ...website.map((ok) => ({ endpointId: 'w', kind: 'website' as const, ok, latencyMs: 1 })),
+      ...subscription.map((ok) => ({
+        endpointId: 's',
+        kind: 'subscription' as const,
+        ok,
+        latencyMs: 1,
+      })),
+    ];
+    expect(summarize(results)).toMatchObject({
+      health,
+      website: { total: website.length, up: website.filter(Boolean).length },
+      subscription: { total: subscription.length, up: subscription.filter(Boolean).length },
+    });
   });
 });
 describe('Telegram authentication', () => {

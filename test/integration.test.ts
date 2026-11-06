@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import pg from 'pg';
+import { Headers } from 'undici';
 import { beforeAll, beforeEach, afterAll, describe, it, expect, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { database } from '../src/db.js';
@@ -18,7 +19,8 @@ import { telegramUser } from '../src/auth/service.js';
 import { bootstrapAdmin } from '../src/auth/bootstrap.js';
 import { createBot, processBotUpdates } from '../src/telegram/bot.js';
 import { dispatchNotifications, enqueue, TelegramError } from '../src/telegram/notifications.js';
-import type { CheckEndpoint } from '../src/monitor/check.js';
+import { checker, type CheckEndpoint } from '../src/monitor/check.js';
+import * as network from '../src/monitor/network.js';
 import { telegramConfig } from '../src/telegram/settings.js';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { pkceChallenge } from '../src/auth/telegram.js';
@@ -110,14 +112,20 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       latencyMs: 1,
       errorCode: ok ? undefined : 'HTTP_503',
     });
-  async function check(providerId: string, ok: boolean) {
+  async function check(providerId: string, result: boolean | CheckEndpoint) {
     await storage.db.query('INSERT INTO check_jobs(provider_id,dedupe_key) VALUES ($1,$2)', [
       providerId,
       randomUUID(),
     ]);
     const jobs = await claimChecks(storage.db, 1);
     expect(jobs).toHaveLength(1);
-    await runCheck(storage.db, config, jobs[0]!, await monitorSettings(storage.db), fakeCheck(ok));
+    await runCheck(
+      storage.db,
+      config,
+      jobs[0]!,
+      await monitorSettings(storage.db),
+      typeof result === 'boolean' ? fakeCheck(result) : result,
+    );
     expect(
       (await storage.db.query('SELECT status FROM check_jobs WHERE id=$1', [jobs[0]!.id]))[0]!
         .status,
@@ -349,6 +357,131 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
     await expect(addTribute(storage.db, p.id, userId, 'flower')).rejects.toThrow(
       'manual confirmation',
     );
+  });
+  it.each(['website', 'subscription'] as const)(
+    'does not count repeated %s-only failures as outages or notify Telegram',
+    async (failedKind) => {
+      const p = await provider();
+      await storage.db.query(
+        "INSERT INTO telegram_chats(id,title,kind) VALUES ('-100123','Allowed','group'),('100','Admin','admin')",
+      );
+      await check(p.id, false);
+      const settings = await monitorSettings(storage.db);
+      for (let i = 0; i <= settings.failureThreshold; i++)
+        await check(p.id, (e) => fakeCheck(e.kind !== failedKind)(e, settings));
+      expect(
+        (await storage.db.query('SELECT lifecycle,health,failure_streak FROM providers'))[0],
+      ).toEqual({ lifecycle: 'active', health: 'degraded', failure_streak: 0 });
+      expect(await storage.db.query('SELECT id FROM incidents')).toHaveLength(0);
+      expect(await storage.db.query('SELECT id FROM notifications')).toHaveLength(0);
+      const history = await app.inject({ url: `/providers/${p.id}/checks` });
+      expect(history.statusCode, history.body).toBe(200);
+      expect(history.json().items[0]).toMatchObject({
+        health: 'degraded',
+        summary: {
+          website: { total: 1, up: failedKind === 'website' ? 0 : 1 },
+          subscription: { total: 1, up: failedKind === 'subscription' ? 0 : 1 },
+        },
+      });
+      await check(p.id, false);
+      expect((await storage.db.query('SELECT lifecycle,failure_streak FROM providers'))[0]).toEqual(
+        {
+          lifecycle: 'active',
+          failure_streak: 1,
+        },
+      );
+      await check(p.id, false);
+      expect((await storage.db.query('SELECT lifecycle,health FROM providers'))[0]).toEqual({
+        lifecycle: 'suspected',
+        health: 'down',
+      });
+      expect(await storage.db.query('SELECT id FROM incidents')).toHaveLength(1);
+      expect(await storage.db.query('SELECT id FROM notifications')).toHaveLength(2);
+    },
+  );
+  it('closes an automatic incident when one check recovers without opening a new alert', async () => {
+    const p = await provider();
+    await storage.db.query(
+      "INSERT INTO telegram_chats(id,title,kind) VALUES ('100','Admin','admin')",
+    );
+    await check(p.id, false);
+    await check(p.id, false);
+    const settings = await monitorSettings(storage.db);
+    await check(p.id, (e) => fakeCheck(e.kind === 'subscription')(e, settings));
+    expect(
+      (await storage.db.query('SELECT lifecycle,health,failure_streak FROM providers'))[0],
+    ).toEqual({ lifecycle: 'active', health: 'degraded', failure_streak: 0 });
+    expect((await storage.db.query('SELECT status FROM incidents'))[0]!.status).toBe('resolved');
+    expect(
+      await storage.db.query("SELECT id FROM notifications WHERE dedupe_key LIKE 'incident:%'"),
+    ).toHaveLength(1);
+    expect(
+      await storage.db.query("SELECT id FROM notifications WHERE dedupe_key LIKE 'recovery:%'"),
+    ).toHaveLength(1);
+  });
+  it('recovers a provider with parsed subscriptions even when every node is unreachable', async () => {
+    const p = await provider();
+    await check(p.id, false);
+    await check(p.id, false);
+    const fetch = vi.spyOn(network, 'safeFetch').mockImplementation(async (url) => ({
+      status: 200,
+      headers: new Headers(),
+      body: url.includes('sub.example.com')
+        ? 'vless://first@one.example.com:443\nvless://second@two.example.com:443'
+        : '<html>Airport</html>',
+    }));
+    const tcp = vi.spyOn(network, 'probeTcp').mockResolvedValue(false);
+    try {
+      await storage.db.query('INSERT INTO check_jobs(provider_id,dedupe_key) VALUES ($1,$2)', [
+        p.id,
+        randomUUID(),
+      ]);
+      const [job] = await claimChecks(storage.db, 1);
+      await runCheck(storage.db, config, job!, await monitorSettings(storage.db), checker(config));
+      expect(
+        (await storage.db.query('SELECT status FROM check_jobs WHERE id=$1', [job!.id]))[0]!.status,
+      ).toBe('done');
+      expect(
+        (await storage.db.query('SELECT lifecycle,health,failure_streak FROM providers'))[0],
+      ).toEqual({ lifecycle: 'active', health: 'healthy', failure_streak: 0 });
+      expect((await storage.db.query('SELECT status FROM incidents'))[0]!.status).toBe('resolved');
+      const [run] = await storage.db.query('SELECT id FROM check_runs WHERE job_id=$1', [job!.id]);
+      const results = await app.inject({ url: `/admin/checks/${run!.id}/results`, headers: admin });
+      expect(results.statusCode, results.body).toBe(200);
+      expect(results.json().items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'subscription',
+            ok: true,
+            node_count: 2,
+            sampled_nodes: 2,
+            reachable_nodes: 0,
+            error_code: null,
+            probe_mode: 'tcp',
+            probe_error_code: 'NODES_UNREACHABLE',
+          }),
+        ]),
+      );
+      const history = await app.inject({ url: `/providers/${p.id}/checks` });
+      expect(history.statusCode, history.body).toBe(200);
+      expect(history.json().items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: run!.id,
+            health: 'healthy',
+            summary: {
+              health: 'healthy',
+              website: { total: 1, up: 1 },
+              subscription: { total: 1, up: 1 },
+              nodeProbe: 'tcp',
+            },
+          }),
+        ]),
+      );
+    } finally {
+      fetch.mockRestore();
+      tcp.mockRestore();
+    }
   });
   it('schedules once per interval and claims one job per provider across workers', async () => {
     const p = await provider(),
