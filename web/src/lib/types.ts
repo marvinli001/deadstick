@@ -28,6 +28,8 @@ export interface Provider {
   health: Health;
   last_checked_at: string | null;
   death_at: string | null;
+  opened_on: string | null;
+  closed_on: string | null;
   epitaph: string | null;
   created_at: string;
   tribute_count?: number;

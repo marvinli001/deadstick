@@ -426,6 +426,12 @@ describe.skipIf(!connection)('administrator OAuth MCP', () => {
       const listed = await client.listTools();
       expect(listed.tools.some((tool) => tool.name === 'providers_import')).toBe(true);
       expect(
+        listed.tools.find((tool) => tool.name === 'provider_edit')?.inputSchema.properties,
+      ).toMatchObject({
+        opened_on: { anyOf: [{ type: 'string', format: 'date' }, { type: 'null' }] },
+        closed_on: { anyOf: [{ type: 'string', format: 'date' }, { type: 'null' }] },
+      });
+      expect(
         listed.tools.some((tool) => /telegram|user_update|http_request|sql/i.test(tool.name)),
       ).toBe(false);
       const result = await client.callTool({ name: 'overview', arguments: {} });
@@ -550,6 +556,225 @@ describe.skipIf(!connection)('administrator OAuth MCP', () => {
     expect(audit).toContain('provider.delete');
     expect(audit).not.toContain('test-subscription-secret');
   });
+
+  it('edits operating dates through the admin API and MCP without replacing evidence or timestamps', async () => {
+    const auth = await grant();
+    const created = await call<{ id: string }>(
+      auth.access_token,
+      'provider_create',
+      provider('dated'),
+    );
+    const id = created.data.id;
+    await storage.db.query("UPDATE providers SET lifecycle='dead',death_at=now() WHERE id=$1", [
+      id,
+    ]);
+    const original = (await app.inject({ url: `/admin/providers/${id}`, headers: admin })).json();
+    expect(original).toMatchObject({ opened_on: null, closed_on: null });
+    const endpoints = await storage.db.query(
+      'SELECT * FROM endpoints WHERE provider_id=$1 ORDER BY id',
+      [id],
+    );
+    const dates = { opened_on: '2026-10-30', closed_on: '2026-11-03' };
+    for (const headers of [member, moderator, { cookie: admin.cookie }]) {
+      expect(
+        (
+          await app.inject({
+            method: 'PATCH',
+            url: `/admin/providers/${id}`,
+            headers,
+            payload: dates,
+          })
+        ).statusCode,
+      ).toBe(403);
+    }
+    expect(
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: `/admin/providers/${id}`,
+          headers: admin,
+          payload: dates,
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect((await call(auth.access_token, 'provider_edit', { id, name: '日期机场' })).failed).toBe(
+      false,
+    );
+    for (const url of [
+      `/providers/${id}`,
+      '/providers/slug/dated',
+      '/providers',
+      '/graveyard',
+      '/admin/providers',
+      `/admin/providers/${id}`,
+    ]) {
+      const response = await app.inject({ url, headers: admin });
+      expect(response.statusCode, response.body).toBe(200);
+      const data = response.json();
+      expect(data.items ? data.items.find((p: { id: string }) => p.id === id) : data).toMatchObject(
+        {
+          ...dates,
+          name: '日期机场',
+          created_at: original.created_at,
+          death_at: original.death_at,
+        },
+      );
+      expect(response.body).not.toContain('test-subscription-secret');
+    }
+    expect(
+      await storage.db.query('SELECT * FROM endpoints WHERE provider_id=$1 ORDER BY id', [id]),
+    ).toEqual(endpoints);
+    expect((await call(auth.access_token, 'provider_edit', { id, opened_on: null })).failed).toBe(
+      false,
+    );
+    expect((await call(auth.access_token, 'provider_get', { id })).data).toMatchObject({
+      opened_on: null,
+      closed_on: dates.closed_on,
+    });
+    expect((await call(auth.access_token, 'provider_edit', { id, ...dates })).failed).toBe(false);
+    expect((await call(auth.access_token, 'provider_edit', { id, closed_on: null })).failed).toBe(
+      false,
+    );
+    expect((await call(auth.access_token, 'provider_get', { id })).data).toMatchObject({
+      opened_on: dates.opened_on,
+      closed_on: null,
+    });
+    expect((await call(auth.access_token, 'provider_edit', { id, opened_on: null })).failed).toBe(
+      false,
+    );
+    const final = (await call(auth.access_token, 'provider_get', { id })).data;
+    expect(final).toMatchObject({
+      opened_on: null,
+      closed_on: null,
+      created_at: original.created_at,
+      death_at: original.death_at,
+    });
+    const edits = await storage.db.query(
+      "SELECT details FROM audit_log WHERE action='provider.edit' AND target_id=$1 ORDER BY id",
+      [id],
+    );
+    expect(edits[0]!.details).toMatchObject({
+      ...dates,
+      previous: { opened_on: null, closed_on: null },
+    });
+    expect(edits[1]!.details).toMatchObject({ ...dates, previous: dates });
+  });
+
+  it('validates real calendar dates and merged ranges before committing API or MCP edits', async () => {
+    const auth = await grant();
+    const {
+      data: { id },
+    } = await call<{ id: string }>(
+      auth.access_token,
+      'provider_create',
+      provider('date-validation'),
+    );
+    const dates = { opened_on: '2026-10-30', closed_on: '2026-11-03' };
+    expect((await call(auth.access_token, 'provider_edit', { id, ...dates })).failed).toBe(false);
+    for (const value of [
+      '2026-02-30',
+      '2025-02-29',
+      '0000-01-01',
+      '2026-1-01',
+      '2026-10-30T00:00:00Z',
+    ]) {
+      expect(
+        (
+          await app.inject({
+            method: 'PATCH',
+            url: `/admin/providers/${id}`,
+            headers: admin,
+            payload: { opened_on: value },
+          })
+        ).statusCode,
+      ).toBe(400);
+      expect(
+        (await rpc(auth.access_token, 'provider_edit', { id, opened_on: value })).json().error.code,
+      ).toBe(-32602);
+    }
+    for (const patch of [{ opened_on: '2026-11-04' }, { closed_on: '2026-10-29' }]) {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/admin/providers/${id}`,
+        headers: admin,
+        payload: { ...patch, name: '不可写入' },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ error: { code: 'INVALID_DATE_RANGE' } });
+      expect((await call(auth.access_token, 'provider_edit', { id, ...patch })).data).toMatchObject(
+        { error: { code: 'INVALID_DATE_RANGE' } },
+      );
+    }
+    expect((await call(auth.access_token, 'provider_get', { id })).data).toMatchObject({
+      ...dates,
+      name: '机场 date-validation',
+    });
+    await expect(
+      storage.db.query('UPDATE providers SET closed_on=$1 WHERE id=$2', ['2026-10-29', id]),
+    ).rejects.toMatchObject({ code: '23514', constraint: 'provider_dates_order' });
+    expect(
+      (await call(auth.access_token, 'provider_edit', { id, closed_on: dates.opened_on })).failed,
+    ).toBe(false);
+    expect(
+      (
+        await call(auth.access_token, 'provider_edit', {
+          id,
+          opened_on: '2024-02-29',
+          closed_on: null,
+        })
+      ).failed,
+    ).toBe(false);
+    expect(
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: `/admin/providers/${randomUUID()}`,
+          headers: admin,
+          payload: dates,
+        })
+      ).statusCode,
+    ).toBe(404);
+  });
+
+  it.each(['revive', 'incident'] as const)(
+    'clears the closing date on %s recovery and retains the known start',
+    async (mode) => {
+      const created = await app.inject({
+        method: 'POST',
+        url: '/admin/providers',
+        headers: admin,
+        payload: provider(`recover-${mode}`),
+      });
+      const id = created.json().id;
+      await storage.db.query(
+        "UPDATE providers SET lifecycle='dead',death_at=now(),opened_on='2026-10-30',closed_on='2026-11-03' WHERE id=$1",
+        [id],
+      );
+      const input = {
+        reason: '已核验恢复运营',
+        evidenceUrls: ['https://evidence.example.com/recovery'],
+      };
+      const [incident] = await storage.db.query<{ id: string }>(
+        "INSERT INTO incidents(provider_id,summary,manual_review) VALUES ($1,'复核恢复',true) RETURNING id",
+        [id],
+      );
+      const response = await app.inject({
+        method: 'POST',
+        headers: admin,
+        url:
+          mode === 'revive'
+            ? `/admin/providers/${id}/revive`
+            : `/admin/incidents/${incident!.id}/resolve`,
+        payload: mode === 'revive' ? input : { ...input, action: 'recovered' },
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect((await app.inject({ url: `/providers/${id}` })).json()).toMatchObject({
+        lifecycle: 'active',
+        opened_on: '2026-10-30',
+        closed_on: null,
+      });
+    },
+  );
 
   it('reviews and edits submissions with revision checks, then handles incidents and memorials', async () => {
     const auth = await grant();

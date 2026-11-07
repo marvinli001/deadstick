@@ -12,8 +12,7 @@ import {
   notifyRevival,
 } from '../telegram/notifications.js';
 
-export const providerColumns =
-  'p.id,p.slug,p.name,p.description,p.tags,p.aliases,p.lifecycle,p.health,p.last_checked_at,p.death_at,p.epitaph,p.created_at';
+export const providerColumns = `p.id,p.slug,p.name,p.description,p.tags,p.aliases,p.lifecycle,p.health,p.last_checked_at,p.death_at,p.epitaph,p.created_at,to_char(p.opened_on,'YYYY-MM-DD') AS opened_on,to_char(p.closed_on,'YYYY-MM-DD') AS closed_on`;
 export async function audit(
   db: DB,
   actorId: string | null,
@@ -127,7 +126,7 @@ export async function resolveIncident(
     );
     if (provider.lifecycle !== 'dead' || resolution.action !== 'dismissed')
       await tx.query(
-        `UPDATE providers SET lifecycle=$1,death_at=CASE WHEN $2 THEN coalesce(death_at,now()) ELSE NULL END,epitaph=$3,health=CASE WHEN $5 THEN 'unknown' ELSE health END,failure_streak=0,config_version=config_version+1,next_check_at=now(),updated_at=now() WHERE id=$4`,
+        `UPDATE providers SET lifecycle=$1,death_at=CASE WHEN $2 THEN coalesce(death_at,now()) ELSE NULL END,closed_on=CASE WHEN $5 THEN NULL ELSE closed_on END,epitaph=$3,health=CASE WHEN $5 THEN 'unknown' ELSE health END,failure_streak=0,config_version=config_version+1,next_check_at=now(),updated_at=now() WHERE id=$4`,
         [
           dead ? 'dead' : 'active',
           dead,
@@ -200,7 +199,7 @@ export async function reviveProvider(
     if (p.lifecycle !== 'dead')
       throw new AppError(409, 'NOT_DEAD', 'Provider is not in the cemetery');
     await tx.query(
-      "UPDATE providers SET lifecycle='active',health='unknown',death_at=NULL,epitaph=NULL,failure_streak=0,config_version=config_version+1,next_check_at=now(),updated_at=now() WHERE id=$1",
+      "UPDATE providers SET lifecycle='active',health='unknown',death_at=NULL,closed_on=NULL,epitaph=NULL,failure_streak=0,config_version=config_version+1,next_check_at=now(),updated_at=now() WHERE id=$1",
       [providerId],
     );
     const incidents = await tx.query<{ id: string }>(

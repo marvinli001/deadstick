@@ -18,6 +18,7 @@ import {
   Id,
   LeadInput,
   ProviderInput,
+  ProviderPatch,
   SubmissionInput,
 } from '../catalog/schemas.js';
 import { editSubmission } from '../catalog/submissions.js';
@@ -95,20 +96,29 @@ export function managementRoutes(app: FastifyInstance, db: DB, config: Config) {
       preHandler: administrator,
       schema: {
         params: Id,
-        body: Type.Partial(Type.Omit(ProviderInput, ['endpoints']), {
-          minProperties: 1,
-          additionalProperties: false,
-        }),
+        body: ProviderPatch,
       },
     },
     async (req) =>
       db.transaction(async (tx) => {
         if (req.body.name !== undefined && !req.body.name.trim())
           throw new AppError(400, 'INVALID_NAME', 'Name required');
+        const provider = required(
+          (
+            await tx.query<{ opened_on: string | null; closed_on: string | null }>(
+              "SELECT to_char(opened_on,'YYYY-MM-DD') AS opened_on,to_char(closed_on,'YYYY-MM-DD') AS closed_on FROM providers WHERE id=$1 FOR UPDATE",
+              [req.params.id],
+            )
+          )[0],
+        );
+        const openedOn = req.body.opened_on === undefined ? provider.opened_on : req.body.opened_on;
+        const closedOn = req.body.closed_on === undefined ? provider.closed_on : req.body.closed_on;
+        if (openedOn && closedOn && closedOn < openedOn)
+          throw new AppError(400, 'INVALID_DATE_RANGE', 'Closing date precedes opening date');
         required(
           (
             await tx.query(
-              'UPDATE providers SET name=coalesce($1,name),slug=coalesce($2,slug),description=coalesce($3,description),tags=coalesce($4,tags),aliases=coalesce($5,aliases),updated_at=now() WHERE id=$6 RETURNING id',
+              'UPDATE providers SET name=coalesce($1,name),slug=coalesce($2,slug),description=coalesce($3,description),tags=coalesce($4,tags),aliases=coalesce($5,aliases),opened_on=$7,closed_on=$8,updated_at=now() WHERE id=$6 RETURNING id',
               [
                 req.body.name?.trim(),
                 req.body.slug,
@@ -116,11 +126,17 @@ export function managementRoutes(app: FastifyInstance, db: DB, config: Config) {
                 req.body.tags,
                 req.body.aliases?.map((v) => v.trim()).filter(Boolean),
                 req.params.id,
+                openedOn,
+                closedOn,
               ],
             )
           )[0],
         );
-        await audit(tx, req.user!.id, 'provider.edit', req.params.id);
+        await audit(tx, req.user!.id, 'provider.edit', req.params.id, {
+          previous: provider,
+          opened_on: openedOn,
+          closed_on: closedOn,
+        });
         return { ok: true };
       }),
   );

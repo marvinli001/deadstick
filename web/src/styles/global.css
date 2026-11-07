@@ -149,11 +149,6 @@ p {
   outline-offset: 2px;
 }
 
-:root :is(input, textarea, [contenteditable]):focus-visible {
-  outline: 2px solid var(--ink) !important;
-  outline-offset: 2px;
-}
-
 .mono {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;

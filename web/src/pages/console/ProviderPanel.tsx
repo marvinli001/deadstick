@@ -1,22 +1,24 @@
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowUpRight, Pencil, RefreshCw, Sprout, TriangleAlert } from 'lucide-react';
+import { ArrowUpRight, CalendarDays, Pencil, RefreshCw, Sprout, TriangleAlert } from 'lucide-react';
 import { Alert } from '@/components/arc/alert/alert';
 import { Button } from '@/components/arc/button/button';
+import { Input } from '@/components/arc/input/input';
 import { Textarea } from '@/components/arc/textarea/textarea';
 import { useToastStack } from '@/components/arc/toast-stack/toast-stack';
 import { HealthMark, LifecycleMark } from '@/components/marks';
 import { ProviderForm } from '@/components/ProviderForm';
 import { ErrorView, Loading } from '@/components/states';
 import { api, errorText } from '@/lib/api';
-import { ago, dateTime } from '@/lib/format';
+import { ago, dateTime, day } from '@/lib/format';
 import { useChecks } from '@/lib/queries';
+import { useSession } from '@/lib/session';
 import type { AdminEndpoint, AdminProvider, CheckRun, EndpointResult, Page } from '@/lib/types';
 import { EvidenceField, parseUrls, validEvidence } from './shared';
 import styles from './console.module.css';
 
-type Mode = 'view' | 'edit' | 'incident' | 'revive';
+type Mode = 'view' | 'edit' | 'dates' | 'incident' | 'revive';
 
 function useRefresh(id: string) {
   const client = useQueryClient();
@@ -24,6 +26,8 @@ function useRefresh(id: string) {
     Promise.all([
       client.invalidateQueries({ queryKey: ['admin'] }),
       client.invalidateQueries({ queryKey: ['provider'] }),
+      client.invalidateQueries({ queryKey: ['providers'] }),
+      client.invalidateQueries({ queryKey: ['graveyard'] }),
       client.invalidateQueries({ queryKey: ['checks', id] }),
     ]);
 }
@@ -145,7 +149,69 @@ function ReasonForm({
   );
 }
 
+function OperatingDatesForm({
+  provider,
+  onSaved,
+  onCancel,
+}: {
+  provider: AdminProvider;
+  onSaved: () => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [openedOn, setOpenedOn] = useState(provider.opened_on ?? '');
+  const [closedOn, setClosedOn] = useState(provider.closed_on ?? '');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (openedOn && closedOn && closedOn < openedOn) return setError('结束日期不能早于起始日期');
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/admin/providers/${provider.id}`, {
+        method: 'PATCH',
+        body: { opened_on: openedOn || null, closed_on: closedOn || null },
+      });
+      await onSaved();
+    } catch (err) {
+      setError(errorText(err));
+      setBusy(false);
+    }
+  };
+  return (
+    <form className={styles.form} onSubmit={submit}>
+      <Alert open={Boolean(error)} tone="danger" title={error ?? ''} />
+      <Input
+        label="可查运营起始日"
+        description="按最早可查资料填写，未知留空；仅用于跑路展示。"
+        type="date"
+        min="0001-01-01"
+        max="9999-12-31"
+        value={openedOn}
+        onChange={(e) => setOpenedOn(e.target.value)}
+      />
+      <Input
+        label="运营结束日"
+        type="date"
+        min="0001-01-01"
+        max="9999-12-31"
+        value={closedOn}
+        onChange={(e) => setClosedOn(e.target.value)}
+      />
+      <div className={styles.formActions}>
+        <Button type="button" variant="ghost" onClick={onCancel}>
+          取消
+        </Button>
+        <Button type="submit" loading={busy}>
+          保存日期
+        </Button>
+      </div>
+    </form>
+  );
+}
+
 export function ProviderPanel({ id }: { id: string }) {
+  const { user } = useSession();
   const { toast } = useToastStack();
   const refresh = useRefresh(id);
   const [mode, setMode] = useState<Mode>('view');
@@ -185,6 +251,15 @@ export function ProviderPanel({ id }: { id: string }) {
       setChecking(false);
     }
   };
+
+  if (mode === 'dates')
+    return (
+      <OperatingDatesForm
+        provider={p}
+        onSaved={() => done('日期已保存')}
+        onCancel={() => setMode('view')}
+      />
+    );
 
   if (mode === 'edit')
     return (
@@ -232,6 +307,12 @@ export function ProviderPanel({ id }: { id: string }) {
             <Pencil size={15} strokeWidth={1.75} />
             编辑
           </Button>
+          {user?.role === 'admin' && (
+            <Button size="sm" variant="secondary" onClick={() => setMode('dates')}>
+              <CalendarDays size={15} strokeWidth={1.75} />
+              运营日期
+            </Button>
+          )}
           {p.lifecycle === 'dead' ? (
             <Button size="sm" variant="secondary" onClick={() => setMode('revive')}>
               <Sprout size={15} strokeWidth={1.75} />
@@ -275,6 +356,22 @@ export function ProviderPanel({ id }: { id: string }) {
       )}
 
       <dl className={styles.facts}>
+        <div>
+          <dt>收录时间</dt>
+          <dd className="mono">{dateTime(p.created_at)}</dd>
+        </div>
+        <div>
+          <dt>跑路确认</dt>
+          <dd className="mono">{dateTime(p.death_at)}</dd>
+        </div>
+        <div>
+          <dt>可查起始</dt>
+          <dd className="mono">{day(p.opened_on)}</dd>
+        </div>
+        <div>
+          <dt>运营结束</dt>
+          <dd className="mono">{day(p.closed_on)}</dd>
+        </div>
         <div>
           <dt>状态</dt>
           <dd>

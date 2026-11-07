@@ -1,6 +1,11 @@
 import { FormatRegistry, Type, type Static } from '@sinclair/typebox';
 // Fastify's Ajv knows these formats; Value.Check (used by the bot) needs them registered.
 if (!FormatRegistry.Has('uri')) FormatRegistry.Set('uri', (value) => URL.canParse(value));
+if (!FormatRegistry.Has('date'))
+  FormatRegistry.Set('date', (value) => {
+    const timestamp = Date.parse(`${value}T00:00:00Z`);
+    return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === value;
+  });
 export const Id = Type.Object({ id: Type.String({ format: 'uuid' }) });
 export const Page = {
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, default: 20 })),
@@ -33,6 +38,18 @@ export const ProviderInput = Type.Object(
   { additionalProperties: false },
 );
 export type ProviderInput = Static<typeof ProviderInput>;
+const OperationDate = Type.Union([
+  Type.String({ format: 'date', pattern: '^(?!0000)\\d{4}-\\d{2}-\\d{2}$' }),
+  Type.Null(),
+]);
+export const ProviderPatch = Type.Object(
+  {
+    ...Type.Partial(Type.Omit(ProviderInput, ['endpoints'])).properties,
+    opened_on: Type.Optional(OperationDate),
+    closed_on: Type.Optional(OperationDate),
+  },
+  { minProperties: 1, additionalProperties: false },
+);
 export const SubmissionInput = Type.Object(
   {
     ...Type.Omit(ProviderInput, ['slug', 'aliases']).properties,

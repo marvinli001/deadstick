@@ -10,7 +10,7 @@ import { HealthMark, LifecycleMark, StatusTag } from '@/components/marks';
 import { Tributes } from '@/components/Tributes';
 import { Empty, ErrorView, Loading } from '@/components/states';
 import { api, ApiError, errorText } from '@/lib/api';
-import { ago, count, dateTime, day, daysBetween } from '@/lib/format';
+import { ago, count, dateTime, day, daysBetween, operatingDates } from '@/lib/format';
 import { useChecks, useFollow, useMemorials, useProvider } from '@/lib/queries';
 import { useSession } from '@/lib/session';
 import { isMiniApp, telegram } from '@/lib/telegram';
@@ -205,14 +205,15 @@ function Memorials({ provider }: { provider: ProviderDetail }) {
 
 function ObituaryView({ provider, slug }: { provider: ProviderDetail; slug: string }) {
   const cause = provider.incidents.find((i) => i.status === 'confirmed_dead');
+  const days = daysBetween(provider.opened_on, provider.closed_on);
   return (
     <div className={styles.obituary}>
       <header className={styles.notice}>
         <Chrysanthemum size={92} />
         <h1>{provider.name}</h1>
         <p className={`${styles.dates} mono`}>
-          {day(provider.created_at)} — {day(provider.death_at)}
-          <span>{daysBetween(provider.created_at, provider.death_at)} 天</span>
+          {operatingDates(provider.opened_on, provider.closed_on)}
+          {days !== null && <span>{days} 天</span>}
         </p>
         {provider.epitaph && <p className={styles.epitaph}>{provider.epitaph}</p>}
         <Tributes provider={provider} slug={slug} />

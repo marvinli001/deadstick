@@ -1,9 +1,10 @@
-import type { Health, Lifecycle, Role } from './types';
+import type { Health, Lifecycle, Role } from './types.js';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
 export function day(value: string | null | undefined) {
   if (!value) return '—';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value.replaceAll('-', '.');
   const d = new Date(value);
   return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}`;
 }
@@ -30,9 +31,14 @@ export function ago(value: string | null | undefined, now = Date.now()) {
   return day(value);
 }
 
-export function daysBetween(from: string, to: string | null) {
-  const end = to ? new Date(to).getTime() : Date.now();
-  return Math.max(0, Math.floor((end - new Date(from).getTime()) / 86400000));
+export function operatingDates(from: string | null, to: string | null) {
+  if (!from && !to) return '运营日期不详';
+  return `${from ? day(from) : '起始不详'} — ${to ? day(to) : '结束不详'}`;
+}
+
+export function daysBetween(from: string | null, to: string | null) {
+  if (!from || !to) return null;
+  return Math.floor((Date.parse(to) - Date.parse(from)) / 86400000);
 }
 
 export const lifecycleLabel: Record<Lifecycle, string> = {

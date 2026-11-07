@@ -115,6 +115,7 @@ const messages: Record<string, string> = {
   LAST_LOGIN_METHOD: '先设置邮箱密码，才能解绑',
   TOO_LARGE: '文件超过 20 MB',
   INVALID_URL: '地址无效',
+  INVALID_DATE_RANGE: '结束日期不能早于起始日期',
   UNSAFE_URL: '只接受公网 http(s) 地址，端口 80、443、8080、8443',
   BLOCKED_ADDRESS: '不能使用内网地址',
   FST_ERR_RATE_LIMIT: '操作太频繁，稍后再试',

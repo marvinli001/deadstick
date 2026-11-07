@@ -4,13 +4,14 @@ import { Chrysanthemum } from '@/components/art';
 import { LifecycleMark, HealthMark } from '@/components/marks';
 import { Tributes } from '@/components/Tributes';
 import { ErrorView, Loading } from '@/components/states';
-import { ago, count, day, daysBetween } from '@/lib/format';
+import { ago, count, daysBetween, operatingDates } from '@/lib/format';
 import { useGraveyard, useProvider, useProviders, useStats } from '@/lib/queries';
 import type { Provider } from '@/lib/types';
 import styles from './Home.module.css';
 
 function Obituary({ latest }: { latest: Provider }) {
   const detail = useProvider(latest.slug);
+  const days = daysBetween(latest.opened_on, latest.closed_on);
   return (
     <article className={styles.obituary}>
       <Chrysanthemum size={88} className={styles.flower} />
@@ -18,8 +19,8 @@ function Obituary({ latest }: { latest: Provider }) {
         <Link to={`/airports/${latest.slug}`}>{latest.name}</Link>
       </h1>
       <p className={`${styles.dates} mono`}>
-        {day(latest.created_at)} — {day(latest.death_at)}
-        <span>{daysBetween(latest.created_at, latest.death_at)} 天</span>
+        {operatingDates(latest.opened_on, latest.closed_on)}
+        {days !== null && <span>{days} 天</span>}
       </p>
       {latest.epitaph && <p className={styles.epitaph}>{latest.epitaph}</p>}
       {detail.data ? (

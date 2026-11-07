@@ -6,6 +6,7 @@ import {
   MonitorSettings,
   Page,
   ProviderInput,
+  ProviderPatch,
   Resolution,
   SubmissionInput,
 } from '../catalog/schemas.js';
@@ -81,12 +82,12 @@ export const mcpTools = [
   ),
   operation(
     'provider_edit',
-    '修改机场名称、slug、简介、标签或别名，保留全部官网和订阅。',
+    '修改机场名称、slug、简介、标签、别名或可查运营日期，保留全部官网和订阅。opened_on 为可查运营起始日（可按最早可查资料填写），closed_on 为运营结束日，格式 YYYY-MM-DD，null 清除，省略保留；未知日期留空，不改变收录时间和跑路确认时间。运营日期仅用于跑路展示。',
     'PATCH',
     '/admin/providers/:id',
     {
       params: Id,
-      body: Type.Partial(Type.Omit(ProviderInput, ['endpoints']), { minProperties: 1 }),
+      body: ProviderPatch,
     },
   ),
   operation(

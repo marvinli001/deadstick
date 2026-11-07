@@ -2,7 +2,7 @@ import { useSearchParams, Link } from 'react-router';
 import { Pagination } from '@/components/arc/pagination/pagination';
 import { Chrysanthemum } from '@/components/art';
 import { Empty, ErrorView, Loading } from '@/components/states';
-import { count, day, daysBetween, plot } from '@/lib/format';
+import { count, daysBetween, operatingDates, plot } from '@/lib/format';
 import { useGraveyard } from '@/lib/queries';
 import styles from './Cemetery.module.css';
 
@@ -29,25 +29,28 @@ export default function Cemetery() {
         <Empty title="暂无新坟" />
       ) : (
         <ol className={styles.register}>
-          {items.map((item, index) => (
-            <li key={item.id}>
-              <Link to={`/airports/${item.slug}`} className={styles.row}>
-                <span className={`${styles.plot} mono`}>
-                  {plot(total - (page - 1) * LIMIT - index)}
-                </span>
-                <span className={styles.name}>{item.name}</span>
-                <span className={`${styles.dates} mono`}>
-                  {day(item.created_at)} — {day(item.death_at)}
-                  <em>{daysBetween(item.created_at, item.death_at)} 天</em>
-                </span>
-                {item.epitaph && <span className={styles.epitaph}>{item.epitaph}</span>}
-                <span className={`${styles.tributes} mono`}>
-                  <Chrysanthemum size={16} simple />
-                  {count(item.tribute_count ?? 0)}
-                </span>
-              </Link>
-            </li>
-          ))}
+          {items.map((item, index) => {
+            const days = daysBetween(item.opened_on, item.closed_on);
+            return (
+              <li key={item.id}>
+                <Link to={`/airports/${item.slug}`} className={styles.row}>
+                  <span className={`${styles.plot} mono`}>
+                    {plot(total - (page - 1) * LIMIT - index)}
+                  </span>
+                  <span className={styles.name}>{item.name}</span>
+                  <span className={`${styles.dates} mono`}>
+                    {operatingDates(item.opened_on, item.closed_on)}
+                    {days !== null && <em>{days} 天</em>}
+                  </span>
+                  {item.epitaph && <span className={styles.epitaph}>{item.epitaph}</span>}
+                  <span className={`${styles.tributes} mono`}>
+                    <Chrysanthemum size={16} simple />
+                    {count(item.tribute_count ?? 0)}
+                  </span>
+                </Link>
+              </li>
+            );
+          })}
         </ol>
       )}
       {total > LIMIT && (
