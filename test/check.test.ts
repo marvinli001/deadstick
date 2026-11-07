@@ -134,3 +134,53 @@ it('rejects subscription download failures', async () => {
   });
   expect(mocks.proxy).not.toHaveBeenCalled();
 });
+it.each([200, 403, 503])(
+  'records a Cloudflare website challenge as inconclusive at HTTP %s',
+  async (status) => {
+    mocks.fetch.mockResolvedValue({
+      status,
+      headers: new Headers({ 'cf-mitigated': 'challenge', 'content-type': 'text/html' }),
+      body: '<html><title>Just a moment...</title></html>',
+    });
+    const result = await checker(config)({ ...endpoint, kind: 'website' }, settings);
+    expect(result).toMatchObject({
+      ok: false,
+      httpStatus: status,
+      errorCode: 'WEBSITE_CHALLENGE',
+    });
+    expect(summarize([result])).toMatchObject({
+      health: 'unknown',
+      website: { total: 1, up: 0, blocked: 1 },
+    });
+    const failure = { ...result, errorCode: 'HTTP_503' };
+    expect(summarize([result, failure]).health).toBe('unknown');
+    expect(summarize([result, { ...result, ok: true, errorCode: undefined }]).health).toBe(
+      'degraded',
+    );
+    expect(mocks.proxy).not.toHaveBeenCalled();
+  },
+);
+it.each([403, 404, 429, 503])(
+  'keeps ordinary HTTP %s website failures even behind Cloudflare',
+  async (status) => {
+    mocks.fetch.mockResolvedValue({
+      status,
+      headers: new Headers({ server: 'cloudflare' }),
+      body: '<html>Unavailable</html>',
+    });
+    const result = await checker(config)({ ...endpoint, kind: 'website' }, settings);
+    expect(result).toMatchObject({ ok: false, httpStatus: status, errorCode: `HTTP_${status}` });
+    expect(summarize([result]).health).toBe('down');
+  },
+);
+it('does not accept a challenge page as a valid subscription', async () => {
+  mocks.fetch.mockResolvedValue({
+    status: 403,
+    headers: new Headers({ 'cf-mitigated': 'challenge' }),
+    body: '<html><title>Just a moment...</title></html>',
+  });
+  const result = await checker(config)(endpoint, settings);
+  expect(result).toMatchObject({ ok: false, errorCode: 'HTTP_403' });
+  expect(summarize([result]).health).toBe('down');
+  expect(mocks.proxy).not.toHaveBeenCalled();
+});

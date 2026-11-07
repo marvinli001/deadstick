@@ -45,7 +45,9 @@ export function checker(config: Config): CheckEndpoint {
         settings.checkTimeoutMs,
       );
       result.httpStatus = response.status;
-      if (response.status < 200 || response.status >= 400)
+      if (endpoint.kind === 'website' && response.headers.get('cf-mitigated') === 'challenge')
+        result.errorCode = 'WEBSITE_CHALLENGE';
+      else if (response.status < 200 || response.status >= 400)
         result.errorCode = `HTTP_${response.status}`;
       else if (endpoint.kind === 'website') result.ok = true;
       else {
@@ -110,14 +112,21 @@ export function checker(config: Config): CheckEndpoint {
 export function summarize(results: EndpointResult[]) {
   const websites = results.filter((r) => r.kind === 'website'),
     subscriptions = results.filter((r) => r.kind === 'subscription');
+  const blocked = websites.filter((r) => r.errorCode === 'WEBSITE_CHALLENGE').length;
   const health = !results.some((r) => r.ok)
-    ? 'down'
+    ? blocked > 0
+      ? 'unknown'
+      : 'down'
     : results.every((r) => r.ok)
       ? 'healthy'
       : 'degraded';
   return {
     health,
-    website: { total: websites.length, up: websites.filter((r) => r.ok).length },
+    website: {
+      total: websites.length,
+      up: websites.filter((r) => r.ok).length,
+      ...(blocked > 0 ? { blocked } : {}),
+    },
     subscription: { total: subscriptions.length, up: subscriptions.filter((r) => r.ok).length },
     nodeProbe: subscriptions.find((r) => r.probeMode)?.probeMode ?? 'none',
   };

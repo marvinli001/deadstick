@@ -39,7 +39,8 @@
   background: var(--alarm);
 }
 
-.cell[data-health='unknown'] {
+.cell[data-health='unknown'],
+.part[data-health='unknown'] {
   outline: 1px dashed var(--ink-3);
   outline-offset: -1px;
 }

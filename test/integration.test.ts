@@ -358,6 +358,71 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       'manual confirmation',
     );
   });
+  it('keeps website challenges inconclusive without outage alerts or false recovery', async () => {
+    const p = await storage.db.transaction((tx) =>
+      createProvider(
+        tx,
+        prepareProvider({ ...input, endpoints: [input.endpoints[0]!] }, config),
+        adminId,
+      ),
+    );
+    await storage.db.query(
+      "INSERT INTO telegram_chats(id,title,kind) VALUES ('100','Admin','admin')",
+    );
+    await check(p.id, false);
+    const fetch = vi.spyOn(network, 'safeFetch').mockResolvedValue({
+      status: 403,
+      headers: new Headers({ 'cf-mitigated': 'challenge' }),
+      body: '<html><title>Just a moment...</title></html>',
+    });
+    try {
+      const settings = await monitorSettings(storage.db);
+      for (let i = 0; i <= settings.failureThreshold; i++) await check(p.id, checker(config));
+      expect(
+        (await storage.db.query('SELECT lifecycle,health,failure_streak FROM providers'))[0],
+      ).toEqual({ lifecycle: 'active', health: 'unknown', failure_streak: 0 });
+      expect(await storage.db.query('SELECT id FROM incidents')).toHaveLength(0);
+      expect(await storage.db.query('SELECT id FROM notifications')).toHaveLength(0);
+      const history = await app.inject({ url: `/providers/${p.id}/checks` });
+      expect(history.statusCode, history.body).toBe(200);
+      const run = history.json().items[0];
+      expect(run).toMatchObject({
+        health: 'unknown',
+        summary: { website: { total: 1, up: 0, blocked: 1 } },
+      });
+      const results = await app.inject({ url: `/admin/checks/${run.id}/results`, headers: admin });
+      expect(results.statusCode, results.body).toBe(200);
+      expect(results.json().items).toEqual([
+        expect.objectContaining({
+          kind: 'website',
+          ok: false,
+          http_status: 403,
+          error_code: 'WEBSITE_CHALLENGE',
+        }),
+      ]);
+      await check(p.id, false);
+      await check(p.id, false);
+      await check(p.id, checker(config));
+      expect(
+        (await storage.db.query('SELECT lifecycle,health,failure_streak FROM providers'))[0],
+      ).toEqual({ lifecycle: 'suspected', health: 'unknown', failure_streak: 0 });
+      expect((await storage.db.query('SELECT status FROM incidents'))[0]!.status).toBe('open');
+      expect(await storage.db.query('SELECT id FROM notifications')).toHaveLength(1);
+      fetch.mockResolvedValue({
+        status: 200,
+        headers: new Headers(),
+        body: '<html>Airport</html>',
+      });
+      await check(p.id, checker(config));
+      expect(
+        (await storage.db.query('SELECT lifecycle,health,failure_streak FROM providers'))[0],
+      ).toEqual({ lifecycle: 'active', health: 'healthy', failure_streak: 0 });
+      expect((await storage.db.query('SELECT status FROM incidents'))[0]!.status).toBe('resolved');
+      expect(await storage.db.query('SELECT id FROM notifications')).toHaveLength(2);
+    } finally {
+      fetch.mockRestore();
+    }
+  });
   it.each(['website', 'subscription'] as const)(
     'does not count repeated %s-only failures as outages or notify Telegram',
     async (failedKind) => {

@@ -133,9 +133,11 @@ export async function runCheck(
         );
       const streak = summary.health === 'down' ? current.failure_streak + 1 : 0;
       const suspected = streak >= settings.failureThreshold;
+      const lifecycle =
+        summary.health === 'unknown' ? current.lifecycle : suspected ? 'suspected' : 'active';
       await tx.query(
         "UPDATE providers SET health=$1,failure_streak=$2,lifecycle=CASE WHEN $3::text='active' AND EXISTS(SELECT 1 FROM incidents WHERE provider_id=$4 AND status='open' AND manual_review) THEN 'suspected' ELSE $3 END,last_checked_at=now(),updated_at=now() WHERE id=$4",
-        [summary.health, streak, suspected ? 'suspected' : 'active', provider.id],
+        [summary.health, streak, lifecycle, provider.id],
       );
       if (suspected) {
         const [incident] = await tx.query<{ id: string }>(

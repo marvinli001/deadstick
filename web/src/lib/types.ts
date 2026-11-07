@@ -54,7 +54,7 @@ export interface ProviderDetail extends Provider {
 
 export interface CheckSummary {
   health: Health;
-  website: { total: number; up: number };
+  website: { total: number; up: number; blocked?: number };
   subscription: { total: number; up: number };
   nodeProbe: 'tcp' | 'proxy' | 'none';
 }

@@ -7,7 +7,12 @@ function detail(run: CheckRun) {
   const s = run.summary;
   const parts = [`${dateTime(run.created_at)} ${healthLabel[run.health]}`];
   const both = s.website.total > 0 && s.subscription.total > 0;
-  if (s.website.total) parts.push(`官网${both ? '（上）' : ''} ${s.website.up}/${s.website.total}`);
+  if (s.website.total)
+    parts.push(
+      s.website.blocked === s.website.total
+        ? `官网${both ? '（上）' : ''} 防护验证 ${s.website.blocked}/${s.website.total}`
+        : `官网${both ? '（上）' : ''} ${s.website.up}/${s.website.total}${s.website.blocked ? `（防护验证 ${s.website.blocked}）` : ''}`,
+    );
   if (s.subscription.total)
     parts.push(`订阅${both ? '（下）' : ''} ${s.subscription.up}/${s.subscription.total}`);
   return parts.join(' · ');
@@ -36,13 +41,20 @@ export function CheckStrip({
           >
             {(['website', 'subscription'] as const).map((kind) => {
               const part = run.summary[kind];
+              const blocked = kind === 'website' ? (run.summary.website.blocked ?? 0) : 0;
               return part.total > 0 ? (
                 <span
                   key={kind}
                   className={styles.part}
                   data-kind={kind}
                   data-health={
-                    part.up === part.total ? 'healthy' : part.up > 0 ? 'degraded' : 'down'
+                    part.up === part.total
+                      ? 'healthy'
+                      : blocked > 0 && part.up === 0
+                        ? 'unknown'
+                        : part.up > 0
+                          ? 'degraded'
+                          : 'down'
                   }
                   aria-hidden="true"
                 />
