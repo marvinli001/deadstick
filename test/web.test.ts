@@ -47,6 +47,11 @@ describe('web and API on one origin', () => {
     expect(page.headers['content-security-policy']).toContain(
       "script-src 'self' https://telegram.org",
     );
+    for (const directive of ['script-src', 'frame-src', 'connect-src']) {
+      expect(page.headers['content-security-policy']).toMatch(
+        new RegExp(`${directive}[^;]*https://challenges\\.cloudflare\\.com`),
+      );
+    }
     const head = await app.inject({
       method: 'HEAD',
       url: '/airports/example',

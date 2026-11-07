@@ -66,6 +66,10 @@ async function parse<T>(response: Response): Promise<T> {
 }
 
 const messages: Record<string, string> = {
+  TURNSTILE_CONFIG: '请填写 Site Key 和 Secret Key 后再启用',
+  TURNSTILE_REQUIRED: '请先完成安全验证',
+  TURNSTILE_FAILED: '验证未通过或已过期，请重新验证',
+  TURNSTILE_UNAVAILABLE: '安全验证暂时不可用，请稍后重试',
   OAUTH_EXPIRED: '授权链接已过期，请回到客户端重新连接',
   ENDPOINT_LIMIT: '每个机场最多 30 个地址',
   ENDPOINT_REQUIRED: '至少保留一个地址',

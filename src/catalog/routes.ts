@@ -13,6 +13,7 @@ import type { DB } from '../db.js';
 import type { Config } from '../config.js';
 import { authenticated, reviewer } from '../auth/service.js';
 import { required } from '../errors.js';
+import { TurnstileToken, verifyTurnstile } from '../turnstile.js';
 import {
   Id,
   Page,
@@ -33,6 +34,15 @@ import {
   reviewSubmission,
   setFollow,
 } from './service.js';
+
+const protectedSubmission = Type.Object(
+  { ...SubmissionInput.properties, turnstileToken: TurnstileToken },
+  { additionalProperties: false },
+);
+const protectedLead = Type.Object(
+  { ...LeadInput.properties, turnstileToken: TurnstileToken },
+  { additionalProperties: false },
+);
 
 export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
   const api = app.withTypeProvider<TypeBoxTypeProvider>();
@@ -148,9 +158,10 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     {
       preHandler: authenticated,
       config: { rateLimit: { max: 5, timeWindow: '1 hour' } },
-      schema: { tags: ['submissions'], body: SubmissionInput },
+      schema: { tags: ['submissions'], body: protectedSubmission },
     },
     async (req, reply) => {
+      await verifyTurnstile(db, config, req.body.turnstileToken, 'submission', req.ip);
       const row = await createSubmission(
         db,
         config,
@@ -218,18 +229,32 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     {
       preHandler: authenticated,
       config: { rateLimit: { max: 10, timeWindow: '1 hour' } },
-      schema: { tags: ['submissions'], params: Id, body: Type.Union([SubmissionInput, LeadInput]) },
+      schema: {
+        tags: ['submissions'],
+        params: Id,
+        body: Type.Union([protectedSubmission, protectedLead]),
+      },
     },
-    (req) => supplementSubmission(db, config, req.user!, req.params.id, req.body),
+    async (req) => {
+      await verifyTurnstile(
+        db,
+        config,
+        req.body.turnstileToken,
+        'kind' in req.body ? 'lead' : 'submission',
+        req.ip,
+      );
+      return supplementSubmission(db, config, req.user!, req.params.id, req.body);
+    },
   );
   api.post(
     '/providers/:id/submissions',
     {
       preHandler: authenticated,
       config: { rateLimit: { max: 10, timeWindow: '1 hour' } },
-      schema: { tags: ['submissions'], params: Id, body: LeadInput },
+      schema: { tags: ['submissions'], params: Id, body: protectedLead },
     },
     async (req, reply) => {
+      await verifyTurnstile(db, config, req.body.turnstileToken, 'lead', req.ip);
       const row = await createLead(db, config, req.user!, req.params.id, req.body);
       reply.code(201);
       return row;
@@ -444,12 +469,13 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
         tags: ['cemetery'],
         params: Id,
         body: Type.Object(
-          { body: Type.String({ minLength: 1, maxLength: 1000 }) },
+          { body: Type.String({ minLength: 1, maxLength: 1000 }), turnstileToken: TurnstileToken },
           { additionalProperties: false },
         ),
       },
     },
     async (req, reply) => {
+      await verifyTurnstile(db, config, req.body.turnstileToken, 'memorial', req.ip);
       const row = await createMemorial(db, req.params.id, req.user!, req.body.body);
       reply.code(201);
       return row;

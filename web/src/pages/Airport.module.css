@@ -89,10 +89,23 @@
 
 .compose {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: end;
   gap: 12px;
   margin-bottom: 28px;
+}
+
+.composeActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.verification {
+  flex: 1 1 260px;
+  min-width: 0;
 }
 
 .compose label {

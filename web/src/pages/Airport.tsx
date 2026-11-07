@@ -8,6 +8,7 @@ import { Chrysanthemum } from '@/components/art';
 import { CheckStrip } from '@/components/CheckStrip';
 import { HealthMark, LifecycleMark, StatusTag } from '@/components/marks';
 import { Tributes } from '@/components/Tributes';
+import { useTurnstile } from '@/components/Turnstile';
 import { Empty, ErrorView, Loading } from '@/components/states';
 import { api, ApiError, errorText } from '@/lib/api';
 import { ago, count, dateTime, day, daysBetween, operatingDates } from '@/lib/format';
@@ -135,15 +136,16 @@ function Memorials({ provider }: { provider: ProviderDetail }) {
   const memorials = useMemorials(provider.id);
   const [body, setBody] = useState('');
   const [sending, setSending] = useState(false);
+  const turnstile = useTurnstile('memorial');
   const items = memorials.data?.items ?? [];
 
   const submit = async () => {
-    if (!body.trim()) return;
+    if (!body.trim() || !turnstile.ready || sending) return;
     setSending(true);
     try {
       await api(`/providers/${provider.id}/memorials`, {
         method: 'POST',
-        body: { body: body.trim() },
+        body: { body: body.trim(), turnstileToken: turnstile.token },
       });
       setBody('');
       toast({ type: 'success', title: '已提交，审核后公开' });
@@ -151,6 +153,7 @@ function Memorials({ provider }: { provider: ProviderDetail }) {
       toast({ type: 'error', title: errorText(error) });
     } finally {
       setSending(false);
+      turnstile.reset();
     }
   };
 
@@ -174,9 +177,12 @@ function Memorials({ provider }: { provider: ProviderDetail }) {
             rows={3}
             onChange={(e) => setBody(e.target.value)}
           />
-          <Button type="submit" loading={sending} disabled={!body.trim()}>
-            寄出
-          </Button>
+          <div className={styles.composeActions}>
+            {turnstile.widget && <div className={styles.verification}>{turnstile.widget}</div>}
+            <Button type="submit" loading={sending} disabled={!body.trim() || !turnstile.ready}>
+              寄出
+            </Button>
+          </div>
         </form>
       ) : (
         <p className={styles.muted}>

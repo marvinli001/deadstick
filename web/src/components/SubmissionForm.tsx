@@ -7,6 +7,7 @@ import { Select } from '@/components/arc/select/select';
 import { Textarea } from '@/components/arc/textarea/textarea';
 import { TagInput } from '@/components/arc/tag-input/tag-input';
 import { LifecycleMark } from '@/components/marks';
+import { useTurnstile } from '@/components/Turnstile';
 import { api, ApiError, errorText } from '@/lib/api';
 import {
   clearSubmissionDraft,
@@ -51,6 +52,7 @@ export function SubmissionForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [duplicates, setDuplicates] = useState<Provider[]>([]);
+  const turnstile = useTurnstile('submission');
   useEffect(() => {
     saveSubmissionDraft(key, { name, website, description, tags });
   }, [key, name, website, description, tags]);
@@ -64,6 +66,7 @@ export function SubmissionForm({
   };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (!turnstile.ready || busy) return;
     if (!publicWebsite(website)) return setError('官网要以 http:// 或 https:// 开头');
     if (subscription && !publicWebsite(subscription))
       return setError('订阅要以 http:// 或 https:// 开头');
@@ -74,6 +77,7 @@ export function SubmissionForm({
       await api(initial ? `/submissions/${initial.id}` : '/submissions', {
         method: initial ? 'PUT' : 'POST',
         body: {
+          turnstileToken: turnstile.token,
           name: name.trim(),
           description: description.trim(),
           tags,
@@ -91,6 +95,7 @@ export function SubmissionForm({
       if (err instanceof ApiError && err.code === 'DUPLICATE_PROVIDER') await check();
     } finally {
       setBusy(false);
+      turnstile.reset();
     }
   };
   return (
@@ -159,7 +164,13 @@ export function SubmissionForm({
           </ul>
         </div>
       )}
-      <Button type="submit" size="lg" loading={busy} disabled={!name.trim() || !website.trim()}>
+      {turnstile.widget}
+      <Button
+        type="submit"
+        size="lg"
+        loading={busy}
+        disabled={!name.trim() || !website.trim() || !turnstile.ready}
+      >
         {initial ? '补交资料' : '提交'}
       </Button>
     </form>
@@ -181,8 +192,10 @@ export function LeadForm({
   const [evidence, setEvidence] = useState(initial?.provider.report?.evidenceUrls.join('\n') ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const turnstile = useTurnstile('lead');
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (!turnstile.ready || busy) return;
     const evidenceUrls = evidence.split(/\s+/).filter(Boolean).map(publicWebsite);
     if (evidenceUrls.some((url) => !url) || evidenceUrls.length > 10)
       return setError('证据最多 10 个，请填公开的 http(s) 链接');
@@ -198,13 +211,14 @@ export function LeadForm({
     try {
       await api(initial ? `/submissions/${initial.id}` : `/providers/${providerId}/submissions`, {
         method: initial ? 'PUT' : 'POST',
-        body: input,
+        body: { ...input, turnstileToken: turnstile.token },
       });
       onDone();
     } catch (err) {
       setError(errorText(err));
     } finally {
       setBusy(false);
+      turnstile.reset();
     }
   };
   return (
@@ -243,7 +257,13 @@ export function LeadForm({
         value={evidence}
         onChange={(e) => setEvidence(e.target.value)}
       />
-      <Button type="submit" size="lg" loading={busy} disabled={body.trim().length < 3}>
+      {turnstile.widget}
+      <Button
+        type="submit"
+        size="lg"
+        loading={busy}
+        disabled={body.trim().length < 3 || !turnstile.ready}
+      >
         {initial ? '补交线索' : '提交线索'}
       </Button>
     </form>

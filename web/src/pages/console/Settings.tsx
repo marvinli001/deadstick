@@ -7,6 +7,7 @@ import { ErrorView, Loading } from '@/components/states';
 import { api, errorText } from '@/lib/api';
 import type { MonitorSettings } from '@/lib/types';
 import { PageHead } from './shared';
+import { TurnstileSettings } from './TurnstileSettings';
 import styles from './console.module.css';
 
 const fields: {
@@ -84,6 +85,7 @@ export default function Settings() {
     <>
       <PageHead title="设置" />
       <section className={styles.section}>
+        <h2>监测</h2>
         {settings.isPending ? (
           <Loading lines={4} />
         ) : settings.isError ? (
@@ -92,6 +94,7 @@ export default function Settings() {
           <SettingsForm key={JSON.stringify(settings.data)} initial={settings.data} />
         )}
       </section>
+      <TurnstileSettings />
     </>
   );
 }

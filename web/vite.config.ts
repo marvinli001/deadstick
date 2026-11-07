@@ -11,6 +11,7 @@ const apiPaths = [
   '/providers',
   '/graveyard',
   '/stats',
+  '/settings',
   '/submissions',
   '/follows',
   '/admin',

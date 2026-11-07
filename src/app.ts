@@ -25,6 +25,7 @@ import { oauthRoutes } from './mcp/oauth.js';
 import { mcpRoutes } from './mcp/routes.js';
 import { managementRoutes } from './mcp/management.js';
 import { mcpAllows } from './mcp/tools.js';
+import { turnstileRoutes } from './turnstile.js';
 
 const staticPath = /^\/(?:(?:assets|fonts)\/|favicon\.svg(?:\?|$))/;
 
@@ -69,7 +70,9 @@ export async function buildApp(
     frameguard: false,
     contentSecurityPolicy: {
       directives: {
-        scriptSrc: ["'self'", 'https://telegram.org'],
+        scriptSrc: ["'self'", 'https://telegram.org', 'https://challenges.cloudflare.com'],
+        frameSrc: ["'self'", 'https://challenges.cloudflare.com'],
+        connectSrc: ["'self'", 'https://challenges.cloudflare.com'],
         frameAncestors: ["'self'", 'https://web.telegram.org'],
         upgradeInsecureRequests: config.production ? [] : null,
       },
@@ -199,6 +202,7 @@ export async function buildApp(
   });
   authRoutes(app, db, config);
   catalogRoutes(app, db, config);
+  turnstileRoutes(app, db, config);
   adminRoutes(app, db, config, sender);
   telegramRoutes(app, db, config, sender);
   groupSettingsRoutes(app, db, sender);

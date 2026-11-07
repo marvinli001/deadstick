@@ -1,0 +1,23 @@
+.root {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+
+.widget {
+  min-height: 65px;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.status[data-error] {
+  color: var(--alarm);
+}
