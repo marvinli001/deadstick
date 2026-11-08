@@ -822,7 +822,10 @@ describe.skipIf(!connection)('catalog search and submission workflows', () => {
       const revived = action === 'recovered' || action === 'revive';
       expect(updated.lifecycle).toBe(revived ? 'active' : 'dead');
       expect(updated.death_at).toBe(revived ? null : deathAt);
-      expect(updated.epitaph).toBe(revived ? null : '原墓志铭');
+      expect(updated.epitaph).toBeNull();
+      expect(
+        (await storage.db.query('SELECT epitaph FROM providers WHERE id=$1', [p.id]))[0]!.epitaph,
+      ).toBe(revived ? null : '原墓志铭');
       expect(
         updated.incidents.find((incident: { id: string }) => incident.id === incidentId).status,
       ).toBe(

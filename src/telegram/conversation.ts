@@ -201,7 +201,7 @@ export function createConversation(
         const entry = await state(ctx),
           p = entry?.pending;
         if (!p || p.token !== ctx.match[1])
-          return void (await t.answer(ctx, '这轮对话已结束，重新发机场名就行。', true));
+          return void (await t.answer(ctx, '会话已结束，请重新查询。', true));
         const operation = ctx.match[2];
         if (operation === 'cancel') {
           const removed = await db.query(
@@ -235,12 +235,12 @@ export function createConversation(
               return display(
                 ctx,
                 follow
-                  ? `已关注 <b>${escape(provider.name)}</b>，状态变化会私信你。`
+                  ? `已关注 <b>${escape(provider.name)}</b>`
                   : `已取消关注 <b>${escape(provider.name)}</b>。`,
               );
           }
         }
-        await t.answer(ctx, '目标已变化，重新发机场名试试。', true);
+        await t.answer(ctx, '条目已更新，请重新查询。', true);
       },
     );
     bot.callbackQuery('cv:report', async (ctx) => {
@@ -265,7 +265,7 @@ export function createConversation(
         return t.reply(ctx, '已取消。');
       }
       if (ctx.message.text.length > 120)
-        return t.reply(ctx, '发机场名或官网域名就行，120 字以内。');
+        return t.reply(ctx, '请输入机场名或官网域名（120 字以内）。');
       const entry = await state(ctx);
       if (
         intent.action === 'report' &&

@@ -11,7 +11,7 @@ import { Tributes } from '@/components/Tributes';
 import { useTurnstile } from '@/components/Turnstile';
 import { Empty, ErrorView, Loading } from '@/components/states';
 import { api, ApiError, errorText } from '@/lib/api';
-import { ago, count, dateTime, day, daysBetween, operatingDates } from '@/lib/format';
+import { ago, count, dateTime, day, daysBetween, deathNotice, operatingDates } from '@/lib/format';
 import { useChecks, useFollow, useMemorials, useProvider } from '@/lib/queries';
 import { useSession } from '@/lib/session';
 import { isMiniApp, telegram } from '@/lib/telegram';
@@ -93,7 +93,7 @@ function Checks({ provider }: { provider: ProviderDetail }) {
       ) : runs.length ? (
         <CheckStrip runs={runs} />
       ) : (
-        <p className={styles.muted}>还没有检测</p>
+        <p className={styles.muted}>暂无检测记录</p>
       )}
     </section>
   );
@@ -109,8 +109,6 @@ function Incidents({ provider }: { provider: ProviderDetail }) {
           <li key={incident.id}>
             <span className={`${styles.when} mono`}>{dateTime(incident.created_at)}</span>
             <div>
-              <p>{incident.summary}</p>
-              {incident.resolution && <p className={styles.resolution}>{incident.resolution}</p>}
               {incident.evidence_urls.length > 0 && (
                 <p className={styles.evidence}>
                   {incident.evidence_urls.map((url) => (
@@ -221,24 +219,21 @@ function ObituaryView({ provider, slug }: { provider: ProviderDetail; slug: stri
           {operatingDates(provider.opened_on, provider.closed_on)}
           {days !== null && <span>{days} 天</span>}
         </p>
-        {provider.epitaph && <p className={styles.epitaph}>{provider.epitaph}</p>}
+        <p className={styles.epitaph}>{deathNotice(provider.death_at)}</p>
         <Tributes provider={provider} slug={slug} />
         <FollowButton provider={provider} slug={slug} />
         <Link to={`/submit?provider=${provider.id}`}>补充线索</Link>
       </header>
-      {cause && (
+      {cause && cause.evidence_urls.length > 0 && (
         <section className={styles.section}>
-          <h2>死因</h2>
-          <p className={styles.cause}>{cause.resolution ?? cause.summary}</p>
-          {cause.evidence_urls.length > 0 && (
-            <p className={styles.evidence}>
-              {cause.evidence_urls.map((url) => (
-                <a key={url} href={url} target="_blank" rel="noopener noreferrer nofollow">
-                  {host(url)}
-                </a>
-              ))}
-            </p>
-          )}
+          <h2>相关资料</h2>
+          <p className={styles.evidence}>
+            {cause.evidence_urls.map((url) => (
+              <a key={url} href={url} target="_blank" rel="noopener noreferrer nofollow">
+                {host(url)}
+              </a>
+            ))}
+          </p>
         </section>
       )}
       <Memorials provider={provider} />
@@ -255,7 +250,6 @@ function StatusView({ provider, slug }: { provider: ProviderDetail; slug: string
       {provider.lifecycle === 'suspected' && (
         <div className={styles.band} role="status">
           <strong>疑似跑路</strong>
-          {open && <span>{open.summary}</span>}
           {open && <span className="mono">{ago(open.created_at)}</span>}
         </div>
       )}

@@ -72,7 +72,7 @@ async function broadcast(
   key: string,
   message: Outgoing,
   event: NotificationEvent,
-  review?: { subject: string; reply_markup: InlineKeyboardMarkup },
+  review?: { subject: string; reply_markup: InlineKeyboardMarkup; message?: Outgoing },
 ) {
   const chats = await db.query<{ id: string; topic_id: number | null; kind: string }>(
     "SELECT c.id,c.topic_id,c.kind FROM telegram_chats c WHERE c.enabled AND (c.kind='group' AND c.approval_status='approved' AND c.bot_can_send OR c.kind='admin' AND EXISTS(SELECT 1 FROM users u WHERE u.telegram_id=c.id AND u.role IN ('admin','moderator') AND NOT u.disabled))",
@@ -86,15 +86,16 @@ async function broadcast(
     if (seen.has(chat.id)) continue;
     seen.add(chat.id);
     const reviewer = chat.kind === 'admin' && review;
+    const outgoing = reviewer ? (review.message ?? message) : message;
     await enqueue(
       db,
       `${key}:${chat.id}`,
       chat.id,
-      html(reviewer ? { ...message, reply_markup: review.reply_markup } : message),
+      html(reviewer ? { ...outgoing, reply_markup: review.reply_markup } : outgoing),
       chat.topic_id,
       {
         subject: reviewer ? review.subject : undefined,
-        method: message.rich ? 'sendRichMessage' : 'sendMessage',
+        method: outgoing.rich ? 'sendRichMessage' : 'sendMessage',
         audience: chat.kind === 'admin' ? 'reviewer' : (chat.kind as Audience),
         event: chat.kind === 'admin' ? undefined : { ...event, providerId },
       },
@@ -158,7 +159,7 @@ const detailRow = (config: Config, p: ProviderRef, text = '📱 详情') => {
 };
 const evidence = (urls: string[]) =>
   urls
-    .map((u, i) => `<a href="${escape(u).replace(/"/g, '&quot;')}">证据 ${i + 1}</a>`)
+    .map((u, i) => `<a href="${escape(u).replace(/"/g, '&quot;')}">资料 ${i + 1}</a>`)
     .join(' · ');
 
 export async function notifyIncidentOpened(
@@ -168,40 +169,42 @@ export async function notifyIncidentOpened(
   incidentId: string,
   summary: string,
 ) {
-  const text = `⚠️ <b>检测异常 · 尚未确认跑路</b>\n${headline(p)}\n${escape(clip(summary, 1500))}`;
   await broadcast(
     db,
     p.id,
     `incident:${incidentId}`,
     {
-      text,
-      rich: noticeRich(
-        '⚠️ 检测异常',
-        p,
-        `<p><mark>尚未确认跑路</mark> · 等待人工核验</p><details><summary>检测详情</summary><p>${escape(clip(summary, 1500))}</p></details>`,
-      ),
+      text: `⚠️ <b>检测异常</b>\n${headline(p)}\n待核验`,
+      rich: noticeRich('⚠️ 检测异常', p, '<p>待核验</p>'),
       reply_markup: markup([detailRow(config, p)]),
     },
-    { type: 'anomaly', incidentId, summary },
+    { type: 'anomaly', incidentId },
     {
       subject: `incident:${incidentId}`,
       reply_markup: reviewKeyboard(incidentId, miniAppLink(config, `i_${compactId(incidentId)}`)),
+      message: {
+        text: `⚠️ <b>检测异常</b>\n${headline(p)}\n${escape(clip(summary, 1500))}`,
+        rich: noticeRich(
+          '⚠️ 检测异常',
+          p,
+          `<details open><summary>异常记录</summary><p>${escape(clip(summary, 1500))}</p></details>`,
+        ),
+      },
     },
   );
 }
 export async function notifyRecovery(db: DB, config: Config, p: ProviderRef, incidentId: string) {
-  const summary = '至少一项检测通过，本次异常自动关闭。';
   await clearReviewButtons(db, `incident:${incidentId}`);
   await broadcast(
     db,
     p.id,
     `recovery:${incidentId}`,
     {
-      text: `✅ <b>检测恢复</b>\n${headline(p)}\n${summary}`,
-      rich: noticeRich('✅ 检测恢复', p, `<p>${summary}</p>`),
+      text: `✅ <b>检测恢复</b>\n${headline(p)}`,
+      rich: noticeRich('✅ 检测恢复', p, ''),
       reply_markup: markup([detailRow(config, p)]),
     },
-    { type: 'recovery', incidentId, summary },
+    { type: 'recovery', incidentId },
   );
 }
 export async function notifyResolution(
@@ -218,21 +221,21 @@ export async function notifyResolution(
   await clearReviewButtons(db, `incident:${incidentId}`);
   const dead = resolution.action === 'dead';
   const title = dead
-    ? '🪦 <b>人工核验：确认跑路</b>'
+    ? '🪦 <b>已跑路</b>'
     : resolution.action === 'dismissed'
-      ? '✅ <b>管理员排除本次异常</b>'
-      : '✅ <b>人工核验：服务恢复</b>';
+      ? '✅ <b>异常解除</b>'
+      : '✅ <b>服务恢复</b>';
   const ceremony = startLink(config.botUsername, `c_${compactId(p.id)}`);
   await broadcast(
     db,
     p.id,
     `resolution:${incidentId}`,
     {
-      text: `${title}\n${headline(p)}\n<blockquote>${escape(clip(resolution.reason, 1500))}</blockquote>\n${evidence(resolution.evidenceUrls)}`,
+      text: `${title}\n${headline(p)}\n${evidence(resolution.evidenceUrls)}`,
       rich: noticeRich(
         title.replace(/<[^>]+>/g, ''),
         p,
-        `<blockquote>${escape(clip(resolution.reason, 1500))}</blockquote><details><summary>核验证据 · ${resolution.evidenceUrls.length} 项</summary><ul>${resolution.evidenceUrls.map((u, i) => `<li><a href="${escape(u)}">证据 ${i + 1}</a></li>`).join('')}</ul></details>`,
+        `<details><summary>相关资料 · ${resolution.evidenceUrls.length} 项</summary><ul>${resolution.evidenceUrls.map((u, i) => `<li><a href="${escape(u)}">资料 ${i + 1}</a></li>`).join('')}</ul></details>`,
       ),
       reply_markup: dead
         ? markup([
@@ -247,27 +250,22 @@ export async function notifyResolution(
     {
       type: dead ? 'dead' : resolution.action === 'dismissed' ? 'dismissed' : 'recovery',
       incidentId,
-      summary: resolution.reason,
       evidenceUrls: resolution.evidenceUrls,
       manual: true,
     },
   );
 }
-export async function notifyRevival(db: DB, config: Config, p: ProviderRef, reason: string) {
+export async function notifyRevival(db: DB, config: Config, p: ProviderRef) {
   await broadcast(
     db,
     p.id,
     `revival:${p.id}:${Date.now()}`,
     {
-      text: `🌱 <b>墓碑复活</b>\n${headline(p)}\n经人工核验仍在运营，已移出墓园并重新开始监测。\n<blockquote>${escape(clip(reason, 1500))}</blockquote>`,
-      rich: noticeRich(
-        '🌱 墓碑复活',
-        p,
-        `<p>经人工核验仍在运营，已移出墓园并重新开始监测。</p><blockquote>${escape(clip(reason, 1500))}</blockquote>`,
-      ),
+      text: `🌱 <b>恢复运营</b>\n${headline(p)}`,
+      rich: noticeRich('🌱 恢复运营', p, ''),
       reply_markup: markup([detailRow(config, p)]),
     },
-    { type: 'revival', summary: reason, manual: true },
+    { type: 'revival', manual: true },
   );
 }
 export async function notifySubmission(

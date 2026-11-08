@@ -71,13 +71,6 @@
   color: var(--ink-3);
 }
 
-.cause {
-  max-width: 42em;
-  font-family: var(--font-display);
-  font-size: 21px;
-  line-height: 1.7;
-}
-
 .evidence {
   display: flex;
   flex-wrap: wrap;
@@ -280,11 +273,6 @@
   font-size: 12px;
   color: var(--ink-3);
   padding-top: 3px;
-}
-
-.resolution {
-  margin-top: 6px;
-  color: var(--ink-2);
 }
 
 @media (max-width: 720px) {

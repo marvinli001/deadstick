@@ -320,7 +320,7 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
         const user = required(
           (
             await tx.query<{ role: string; disabled: boolean; telegram_id: string | null }>(
-              'SELECT role,disabled,telegram_id FROM users WHERE id=$1 FOR UPDATE',
+              'SELECT role,disabled,telegram_id FROM users WHERE id=$1 FOR NO KEY UPDATE',
               [req.params.id],
             )
           )[0],
@@ -344,6 +344,7 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
           req.params.id,
         ]);
         await tx.query('DELETE FROM sessions WHERE user_id=$1', [req.params.id]);
+        await tx.query('DELETE FROM mcp_codes WHERE user_id=$1', [req.params.id]);
         await tx.query(
           'UPDATE mcp_connections SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL',
           [req.params.id],

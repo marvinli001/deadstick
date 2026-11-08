@@ -81,11 +81,10 @@ export async function setupBot(db: DB, config: Config, sender: TelegramSender) {
       );
   }
   await sender.send('setMyDescription', {
-    description:
-      '机场可用性观察、人工复核与赛博墓园。查机场是否还活着，关注状态变化；确认跑路的机场入土墓园，可以献花、点烛、上香和留言。自动检测只会标记疑似，跑路结论由人工核验。',
+    description: '机场状态监测与赛博墓园。订阅状态动态，浏览历史记录与公开资料。',
   });
   await sender.send('setMyShortDescription', {
-    short_description: '机场存活观察 · 人工复核 · 赛博墓园',
+    short_description: '机场状态监测 · 赛博墓园',
   });
   await sender.send('setChatMenuButton', {
     menu_button: { type: 'web_app', text: 'Deadstick', web_app: { url: config.publicUrl } },

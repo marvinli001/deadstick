@@ -53,11 +53,11 @@ export interface NotificationSettings {
   presets: Record<string, Policy>;
 }
 const titles = {
-  anomaly: '检测异常 · 尚未确认跑路',
+  anomaly: '检测异常',
   recovery: '检测恢复',
-  dead: '人工核验：确认跑路',
-  dismissed: '人工核验：排除异常',
-  revival: '人工核验：复活',
+  dead: '已跑路',
+  dismissed: '异常解除',
+  revival: '恢复运营',
 };
 
 function ProviderPicker({ ids, onChange }: { ids: string[]; onChange: (ids: string[]) => void }) {

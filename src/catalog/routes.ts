@@ -31,6 +31,7 @@ import {
   insertEndpoints,
   prepareProvider,
   providerColumns,
+  publicProviderColumns,
   reviewSubmission,
   setFollow,
 } from './service.js';
@@ -52,7 +53,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     const provider = required(
       (
         await db.query<{ id: string }>(
-          `SELECT ${providerColumns},(SELECT count(*)::int FROM follows f WHERE f.provider_id=p.id) AS follower_count,(SELECT count(*)::int FROM memorials m WHERE m.provider_id=p.id AND m.status='visible') AS memorial_count,CASE WHEN $2::uuid IS NULL THEN NULL ELSE EXISTS(SELECT 1 FROM follows f WHERE f.provider_id=p.id AND f.user_id=$2::uuid) END AS following FROM providers p WHERE p.${column}=$1`,
+          `SELECT ${publicProviderColumns},(SELECT count(*)::int FROM follows f WHERE f.provider_id=p.id) AS follower_count,(SELECT count(*)::int FROM memorials m WHERE m.provider_id=p.id AND m.status='visible') AS memorial_count,CASE WHEN $2::uuid IS NULL THEN NULL ELSE EXISTS(SELECT 1 FROM follows f WHERE f.provider_id=p.id AND f.user_id=$2::uuid) END AS following FROM providers p WHERE p.${column}=$1`,
           [value, userId ?? null],
         )
       )[0],
@@ -63,7 +64,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
         [provider.id],
       ),
       db.query(
-        'SELECT id,status,summary,resolution,evidence_urls,created_at,resolved_at FROM incidents WHERE provider_id=$1 ORDER BY created_at DESC LIMIT 20',
+        `SELECT id,status,CASE status WHEN 'open' THEN '待核验' WHEN 'confirmed_dead' THEN '已跑路' WHEN 'resolved' THEN '服务恢复' WHEN 'dismissed' THEN '异常解除' END AS summary,NULL::text AS resolution,evidence_urls,created_at,resolved_at FROM incidents WHERE provider_id=$1 ORDER BY created_at DESC LIMIT 20`,
         [provider.id],
       ),
       db.query(
@@ -93,7 +94,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
       const [items, total] = await Promise.all([
         searchProviders(
           db,
-          `SELECT ${providerColumns},(SELECT count(*)::int FROM tributes t WHERE t.provider_id=p.id) AS tribute_count`,
+          `SELECT ${publicProviderColumns},(SELECT count(*)::int FROM tributes t WHERE t.provider_id=p.id) AS tribute_count`,
           q ?? '',
           limit,
           offset,
@@ -108,7 +109,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     const { limit = 20, offset = 0 } = req.query;
     const [items, total] = await Promise.all([
       db.query(
-        `SELECT ${providerColumns},(SELECT count(*)::int FROM tributes t WHERE t.provider_id=p.id) AS tribute_count FROM providers p WHERE lifecycle='dead' ORDER BY death_at DESC,p.id LIMIT $1 OFFSET $2`,
+        `SELECT ${publicProviderColumns},(SELECT count(*)::int FROM tributes t WHERE t.provider_id=p.id) AS tribute_count FROM providers p WHERE lifecycle='dead' ORDER BY death_at DESC,p.id LIMIT $1 OFFSET $2`,
         [limit, offset],
       ),
       count("FROM providers WHERE lifecycle='dead'", []),
@@ -418,7 +419,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     { preHandler: authenticated, schema: { querystring: Type.Object(Page) } },
     async (req) => ({
       items: await db.query(
-        `SELECT ${providerColumns} FROM providers p JOIN follows f ON p.id=f.provider_id WHERE f.user_id=$1 ORDER BY f.created_at DESC LIMIT $2 OFFSET $3`,
+        `SELECT ${publicProviderColumns} FROM providers p JOIN follows f ON p.id=f.provider_id WHERE f.user_id=$1 ORDER BY f.created_at DESC LIMIT $2 OFFSET $3`,
         [req.user!.id, req.query.limit ?? 20, req.query.offset ?? 0],
       ),
     }),

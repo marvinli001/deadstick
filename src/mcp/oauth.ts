@@ -201,10 +201,16 @@ export function oauthRoutes(app: FastifyInstance, db: DB, config: Config) {
         if (!/^[A-Za-z0-9._~-]{43,128}$/.test(verifier))
           throw new OAuthError('invalid_grant', 'Invalid PKCE verifier');
         await db.transaction(async (tx) => {
-          const [authorization] = await tx.query<Authorization & { user_id: string }>(
-            `SELECT c.* FROM mcp_codes c JOIN users u ON u.id=c.user_id
-             WHERE c.code_hash=$1 AND c.expires_at>now() AND u.role='admin' AND NOT u.disabled FOR UPDATE OF c`,
+          const [owner] = await tx.query<{ id: string }>(
+            `SELECT id FROM users WHERE id=(SELECT user_id FROM mcp_codes WHERE code_hash=$1)
+             AND role='admin' AND NOT disabled FOR NO KEY UPDATE`,
             [digest(code)],
+          );
+          if (!owner)
+            throw new OAuthError('invalid_grant', 'Authorization code is invalid or expired');
+          const [authorization] = await tx.query<Authorization & { user_id: string }>(
+            'SELECT * FROM mcp_codes WHERE code_hash=$1 AND user_id=$2 AND expires_at>now() FOR UPDATE',
+            [digest(code), owner.id],
           );
           const challenge = createHash('sha256').update(verifier).digest('base64url');
           if (
@@ -310,6 +316,15 @@ export function oauthRoutes(app: FastifyInstance, db: DB, config: Config) {
     },
     async (req) =>
       db.transaction(async (tx) => {
+        const [account] = await tx.query(
+          "SELECT id FROM users WHERE id=$1 AND role='admin' AND NOT disabled FOR NO KEY UPDATE",
+          [req.user!.id],
+        );
+        const [session] = await tx.query(
+          'SELECT token_hash FROM sessions WHERE token_hash=$1 AND user_id=$2 AND expires_at>now()',
+          [req.sessionHash, req.user!.id],
+        );
+        if (!account || !session) throw new AppError(401, 'UNAUTHORIZED', 'Login required');
         const [authorization] = await tx.query<Authorization>(
           'DELETE FROM mcp_authorizations WHERE request_hash=$1 AND resource=$2 AND expires_at>now() RETURNING *',
           [digest(req.params.request), `${issuer}/mcp`],

@@ -94,7 +94,7 @@ function ResolveForm({ incident, onDone }: { incident: AdminIncident; onDone: ()
         minColumnWidth={110}
       />
       <Textarea
-        label="原因"
+        label="审核备注"
         rows={3}
         maxLength={2000}
         value={reason}

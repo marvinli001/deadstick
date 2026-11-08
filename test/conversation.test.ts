@@ -155,7 +155,7 @@ describe.skipIf(!connection)('private Bot conversations with PostgreSQL', () => 
       await text(query);
       expect(calls.some((call) => call.method === 'sendRichMessage')).toBe(true);
       expect(output()).toContain('疑似跑路');
-      expect(output()).toContain('尚未确认跑路');
+      expect(output()).toContain('待核验');
       expect(output()).toContain('2026-10-01');
     }
     calls.length = 0;
@@ -212,7 +212,7 @@ describe.skipIf(!connection)('private Bot conversations with PostgreSQL', () => 
     await press(confirm);
     expect(await follows()).toHaveLength(1);
     await press(confirm);
-    expect(calls.at(-1)!.payload.text).toContain('这轮对话已结束');
+    expect(calls.at(-1)!.payload.text).toContain('会话已结束');
     expect(await follows()).toHaveLength(1);
     await text('取消关注');
     expect(await follows()).toHaveLength(1);
@@ -237,7 +237,7 @@ describe.skipIf(!connection)('private Bot conversations with PostgreSQL', () => 
     )!;
     const data = 'callback_data' in selection ? selection.callback_data : '';
     await press(data.replace(/[0-9a-f]{32}$/, '0'.repeat(32)));
-    expect(calls.at(-1)!.payload.text).toContain('目标已变化');
+    expect(calls.at(-1)!.payload.text).toContain('条目已更新');
     expect(await follows()).toHaveLength(0);
     await press(data);
     expect(output()).toContain('测试云二号');
@@ -249,13 +249,13 @@ describe.skipIf(!connection)('private Bot conversations with PostgreSQL', () => 
     await text('关注测试云');
     const confirm = button('确认关注');
     await press(confirm, 43);
-    expect(calls.at(-1)!.payload.text).toContain('这轮对话已结束');
+    expect(calls.at(-1)!.payload.text).toContain('会话已结束');
     await text('蹲一下这家', 43);
     expect(calls.at(-1)!.payload.text).toContain('蹲哪家');
     expect(await follows()).toHaveLength(0);
     await storage.db.query("UPDATE bot_conversations SET expires_at=now()-interval '1 second'");
     await press(confirm);
-    expect(calls.at(-1)!.payload.text).toContain('这轮对话已结束');
+    expect(calls.at(-1)!.payload.text).toContain('会话已结束');
     await text('退订');
     expect(calls.at(-1)!.payload.text).toContain('哪家');
     expect(await follows()).toHaveLength(0);
@@ -265,7 +265,7 @@ describe.skipIf(!connection)('private Bot conversations with PostgreSQL', () => 
     const confirm = button('确认关注');
     await text(cancel);
     await press(confirm);
-    expect(calls.at(-1)!.payload.text).toContain('这轮对话已结束');
+    expect(calls.at(-1)!.payload.text).toContain('会话已结束');
     expect(await follows()).toHaveLength(0);
     await text('退订');
     expect(calls.at(-1)!.payload.text).toContain('哪家');
@@ -326,14 +326,12 @@ describe.skipIf(!connection)('private Bot conversations with PostgreSQL', () => 
     calls.length = 0;
     await Promise.all([press(confirm), press(confirm, 42, false, otherBot)]);
     expect(await follows()).toHaveLength(1);
-    expect(
-      calls.filter((call) => call.payload.text === '已关注 <b>测试云</b>，状态变化会私信你。'),
-    ).toHaveLength(1);
+    expect(calls.filter((call) => call.payload.text === '已关注 <b>测试云</b>')).toHaveLength(1);
     await text('退订', 42, {}, otherBot);
     const unfollow = button('确认取消关注');
     await press(button('取消'));
     await press(unfollow, 42, false, otherBot);
-    expect(calls.at(-1)!.payload.text).toContain('这轮对话已结束');
+    expect(calls.at(-1)!.payload.text).toContain('会话已结束');
     expect(await follows()).toHaveLength(1);
     await text('/status test-cloud');
     await text('蹲一下这家', 42, {}, otherBot);

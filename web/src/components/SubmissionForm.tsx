@@ -125,7 +125,7 @@ export function SubmissionForm({
         }}
       />
       <details className={styles.optional}>
-        <summary>补点资料</summary>
+        <summary>补充资料</summary>
         <div className={styles.form}>
           <Input
             label={initial?.subscription_count ? '替换订阅（留空保留）' : '订阅'}

@@ -4,7 +4,7 @@ import { Chrysanthemum } from '@/components/art';
 import { LifecycleMark, HealthMark } from '@/components/marks';
 import { Tributes } from '@/components/Tributes';
 import { ErrorView, Loading } from '@/components/states';
-import { ago, count, daysBetween, operatingDates } from '@/lib/format';
+import { ago, count, daysBetween, deathNotice, operatingDates } from '@/lib/format';
 import { useGraveyard, useProvider, useProviders, useStats } from '@/lib/queries';
 import type { Provider } from '@/lib/types';
 import styles from './Home.module.css';
@@ -22,7 +22,7 @@ function Obituary({ latest }: { latest: Provider }) {
         {operatingDates(latest.opened_on, latest.closed_on)}
         {days !== null && <span>{days} 天</span>}
       </p>
-      {latest.epitaph && <p className={styles.epitaph}>{latest.epitaph}</p>}
+      <p className={styles.epitaph}>{deathNotice(latest.death_at)}</p>
       {detail.data ? (
         <Tributes provider={detail.data} slug={latest.slug} />
       ) : (

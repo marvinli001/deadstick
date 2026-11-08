@@ -231,6 +231,42 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       expect(result.body).not.toContain('sub.example.com');
     }
   });
+  it('projects legacy audit prose as public status while preserving the review records', async () => {
+    const p = await provider();
+    const note = '按管理员本次明确确认，截图显示官网不可用，并要求标记';
+    await storage.db.query(
+      "UPDATE providers SET lifecycle='dead',death_at=now(),epitaph=$2 WHERE id=$1",
+      [p.id, note],
+    );
+    await storage.db.query(
+      "INSERT INTO incidents(provider_id,status,summary,resolution,evidence_urls,resolved_at) VALUES ($1,'confirmed_dead',$2,$2,ARRAY['https://evidence.example/notice'],now())",
+      [p.id, note],
+    );
+    await storage.db.query('INSERT INTO follows(provider_id,user_id) VALUES ($1,$2)', [
+      p.id,
+      userId,
+    ]);
+    for (const url of [
+      '/providers',
+      `/providers/${p.id}`,
+      '/providers/slug/test-airport',
+      '/graveyard',
+      '/follows',
+    ]) {
+      const response = await app.inject({ url, headers: member });
+      expect(response.statusCode, url).toBe(200);
+      expect(response.body, url).not.toContain(note);
+    }
+    const detail = (await app.inject({ url: `/providers/${p.id}` })).json();
+    expect(detail.incidents[0]).toMatchObject({
+      summary: '已跑路',
+      resolution: null,
+      evidence_urls: ['https://evidence.example/notice'],
+    });
+    const reviewed = await app.inject({ url: `/admin/providers/${p.id}`, headers: admin });
+    expect(reviewed.json().epitaph).toBe(note);
+    expect((await storage.db.query('SELECT resolution FROM incidents'))[0]!.resolution).toBe(note);
+  });
   it('approves a submission once and preserves encrypted inputs', async () => {
     const submitted = await app.inject({
       method: 'POST',
@@ -284,6 +320,11 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       },
     });
     expect(resolved.statusCode, resolved.body).toBe(200);
+    expect((await storage.db.query('SELECT epitaph FROM providers'))[0]!.epitaph).toBeNull();
+    expect(
+      (await app.inject({ url: `/admin/incidents?id=${incidents[0]!.id}`, headers: admin })).json()
+        .items[0].resolution,
+    ).toBe('人工核验确认停止运营');
     expect((await app.inject({ url: '/graveyard' })).json().items).toHaveLength(1);
     const tributeUrl = `/providers/${p.id}/tributes`;
     expect(

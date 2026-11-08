@@ -2,7 +2,7 @@ import { useSearchParams, Link } from 'react-router';
 import { Pagination } from '@/components/arc/pagination/pagination';
 import { Chrysanthemum } from '@/components/art';
 import { Empty, ErrorView, Loading } from '@/components/states';
-import { count, daysBetween, operatingDates, plot } from '@/lib/format';
+import { count, daysBetween, deathNotice, operatingDates, plot } from '@/lib/format';
 import { useGraveyard } from '@/lib/queries';
 import styles from './Cemetery.module.css';
 
@@ -42,7 +42,7 @@ export default function Cemetery() {
                     {operatingDates(item.opened_on, item.closed_on)}
                     {days !== null && <em>{days} 天</em>}
                   </span>
-                  {item.epitaph && <span className={styles.epitaph}>{item.epitaph}</span>}
+                  <span className={styles.epitaph}>{deathNotice(item.death_at)}</span>
                   <span className={`${styles.tributes} mono`}>
                     <Chrysanthemum size={16} simple />
                     {count(item.tribute_count ?? 0)}

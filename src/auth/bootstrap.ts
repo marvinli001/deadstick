@@ -32,6 +32,11 @@ export async function bootstrapAdmin(db: DB, env: NodeJS.ProcessEnv) {
           [email, passwordHash],
         );
     await tx.query('DELETE FROM sessions WHERE user_id=$1', [user!.id]);
+    await tx.query('DELETE FROM mcp_codes WHERE user_id=$1', [user!.id]);
+    await tx.query(
+      'UPDATE mcp_connections SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL',
+      [user!.id],
+    );
     await audit(tx, user!.id, 'admin.bootstrap', user!.id, {
       via: telegramId ? 'telegram' : 'email',
     });

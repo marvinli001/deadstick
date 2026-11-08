@@ -22,8 +22,8 @@ describe('notification policy', () => {
     expect(matchesPolicy({ ...base, events: ['dead'] }, 'anomaly', p)).toBe(false);
     expect(matchesPolicy({ ...base, conclusionsOnly: true }, 'recovery', p)).toBe(false);
     expect(matchesPolicy({ ...base, conclusionsOnly: true }, 'recovery', p, true)).toBe(true);
-    expect(eventTitle({ type: 'anomaly' })).toBe('检测异常 · 尚未确认跑路');
-    expect(eventTitle({ type: 'recovery', manual: true })).toBe('人工核验：服务恢复');
+    expect(eventTitle({ type: 'anomaly' })).toBe('检测异常');
+    expect(eventTitle({ type: 'recovery', manual: true })).toBe('服务恢复');
   });
   it('keeps the spectator preset limited to confirmed deaths and revivals', () => {
     const provider = { id: 'one', tags: [] };

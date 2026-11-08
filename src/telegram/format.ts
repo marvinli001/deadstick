@@ -10,7 +10,7 @@ export const clip = (value: string, max: number) =>
 export const lifecycleLabels: Record<string, string> = {
   active: '存活',
   suspected: '疑似跑路',
-  dead: '已入土',
+  dead: '已跑路',
 };
 export const healthLabels: Record<string, string> = {
   unknown: '未知',
@@ -86,10 +86,9 @@ export function providerCard(p: ProviderView) {
     `<code>${escape(p.slug)}</code> · ${lifecycleLabels[p.lifecycle] ?? p.lifecycle} · ${healthLabels[p.health] ?? p.health}`,
     `最近检测：${time(p.last_checked_at)}`,
   ];
-  if (p.lifecycle === 'suspected') lines.push('自动检测连续异常，等待人工核验，尚未确认跑路。');
+  if (p.lifecycle === 'suspected') lines.push('待核验');
   if (p.lifecycle === 'dead') {
-    lines.push(`入土：${time(p.death_at, 'D')}`);
-    if (p.epitaph) lines.push(`<blockquote>${escape(clip(p.epitaph, 500))}</blockquote>`);
+    lines.push(`登记：${time(p.death_at, 'D')}`);
     lines.push(tributeLine(p));
   }
   if (p.description)
@@ -100,8 +99,7 @@ export function ceremonyCard(p: ProviderView) {
   return [
     '🕯 <b>电子追悼会</b>',
     `<b>${escape(p.name)}</b> · <code>${escape(p.slug)}</code>`,
-    `入土：${time(p.death_at, 'D')}`,
-    `<blockquote>${escape(clip(p.epitaph ?? '愿后来者少走弯路。', 500))}</blockquote>`,
+    `已跑路 · ${time(p.death_at, 'D')}`,
     tributeLine(p),
   ].join('\n');
 }
@@ -144,12 +142,8 @@ export function providerRichCard(p: ProviderView) {
     `<h2>${escape(providerTitle(p))}</h2>`,
     `<p><code>${escape(p.slug)}</code></p>`,
     `<table bordered compact><tr><th>状态</th><th>检测</th></tr><tr><td>${escape(lifecycleLabels[p.lifecycle] ?? p.lifecycle)}</td><td>${escape(healthLabels[p.health] ?? p.health)}</td></tr></table>`,
-    p.lifecycle === 'suspected'
-      ? '<blockquote>连续检测异常，等待人工核验，尚未确认跑路。</blockquote>'
-      : '',
-    p.lifecycle === 'dead'
-      ? `<p>入土：${time(p.death_at, 'D')}</p><blockquote>${escape(clip(p.epitaph ?? '愿后来者少走弯路。', 500))}</blockquote><p>${tributeLine(p)}</p>`
-      : '',
+    p.lifecycle === 'suspected' ? '<p>待核验</p>' : '',
+    p.lifecycle === 'dead' ? `<p>登记：${time(p.death_at, 'D')}</p><p>${tributeLine(p)}</p>` : '',
     p.description
       ? `<details><summary>机场介绍</summary><p>${escape(clip(p.description, 600))}</p></details>`
       : '',
@@ -158,7 +152,7 @@ export function providerRichCard(p: ProviderView) {
 }
 
 export function ceremonyRichCard(p: ProviderView) {
-  return `<h2>🕯 电子追悼会</h2><h3>${escape(p.name)}</h3><p><code>${escape(p.slug)}</code> · 入土 ${time(p.death_at, 'D')}</p><aside>${escape(clip(p.epitaph ?? '愿后来者少走弯路。', 500))}</aside><table compact><tr><th>🌼 献花</th><th>🕯 点烛</th><th>🙏 上香</th></tr><tr><td>${p.flowers ?? 0}</td><td>${p.candles ?? 0}</td><td>${p.incense ?? 0}</td></tr></table>`;
+  return `<h2>🕯 电子追悼会</h2><h3>${escape(p.name)}</h3><p><code>${escape(p.slug)}</code> · 已跑路 · ${time(p.death_at, 'D')}</p><table compact><tr><th>🌼 献花</th><th>🕯 点烛</th><th>🙏 上香</th></tr><tr><td>${p.flowers ?? 0}</td><td>${p.candles ?? 0}</td><td>${p.incense ?? 0}</td></tr></table>`;
 }
 const url = (text: string, href: string | undefined): Row => (href ? [{ text, url: href }] : []);
 export const tributeRow = (id: string): Row =>
@@ -238,7 +232,6 @@ const probeLabels: Record<string, string> = { proxy: '真实出网', tcp: '端�
 /** Rich message (Bot API 10.1+) with a table, and the plain HTML fallback for older clients. */
 export function checkReport(p: ProviderView, runs: CheckRun[]) {
   const heading = `${providerTitle(p)} · 检测记录`;
-  const note = '订阅能获取节点即有效；节点抽测仅供参考，确认跑路仍需人工核验。';
   const rows = runs.map((r) => ({
     at: new Date(r.created_at),
     health: healthLabels[r.health] ?? r.health,
@@ -247,12 +240,12 @@ export function checkReport(p: ProviderView, runs: CheckRun[]) {
     probe: probeLabels[r.summary.nodeProbe ?? 'none'] ?? '—',
   }));
   const rich = runs.length
-    ? `<h3>${escape(heading)}</h3><table bordered striped compact><tr><th>时间</th><th>结果</th><th>官网</th><th>订阅</th><th>节点</th></tr>${rows
+    ? `<h3>${escape(heading)}</h3><table bordered striped compact><tr><th>时间</th><th>结果</th><th>官网</th><th>订阅</th><th>节点抽测</th></tr>${rows
         .map(
           (r) =>
             `<tr><td>${time(r.at)}</td><td>${r.health}</td><td align="center">${r.website}</td><td align="center">${r.subscription}</td><td>${r.probe}</td></tr>`,
         )
-        .join('')}</table><footer>${note}</footer>`
+        .join('')}</table>`
     : `<h3>${escape(heading)}</h3><p>暂无检测记录。</p>`;
   const text = [
     `<b>${escape(heading)}</b>`,
@@ -262,7 +255,6 @@ export function checkReport(p: ProviderView, runs: CheckRun[]) {
             `${time(r.at)} · ${r.health} · 官网 ${r.website} · 订阅 ${r.subscription} · ${r.probe}`,
         )
       : ['暂无检测记录。']),
-    `<i>${note}</i>`,
   ].join('\n');
   return { rich, text };
 }

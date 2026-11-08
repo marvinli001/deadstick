@@ -2,11 +2,11 @@ import { Type, type Static } from '@sinclair/typebox';
 import { AppError } from '../errors.js';
 
 export const eventLabels = {
-  anomaly: '检测异常 · 尚未确认跑路',
+  anomaly: '检测异常',
   recovery: '检测恢复',
-  dead: '人工核验：确认跑路',
-  dismissed: '人工核验：排除异常',
-  revival: '人工核验：复活',
+  dead: '已跑路',
+  dismissed: '异常解除',
+  revival: '恢复运营',
 };
 export type EventType = keyof typeof eventLabels;
 const clock = Type.String({ pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' });

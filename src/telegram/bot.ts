@@ -90,11 +90,11 @@ export const allowedUpdates: Array<Exclude<keyof Update, 'update_id'>> = [
 const HTML = { parse_mode: 'HTML' as const, link_preview_options: { is_disabled: true } };
 const errorText: Record<string, string> = {
   NOT_FOUND: '没有找到对应记录。',
-  NOT_DEAD: '只有人工确认跑路的机场可以祭奠和留言。',
-  ALREADY_DEAD: '这个机场已经入土。',
-  ALREADY_REVIEWED: '已经有人处理过了。',
+  NOT_DEAD: '仅限墓园条目。',
+  ALREADY_DEAD: '已列入墓园。',
+  ALREADY_REVIEWED: '记录已处理。',
   SUBMISSION_CHANGED: '投稿已更新，请刷新审核后重试。',
-  INCIDENT_OPEN: '这个机场已有待复核的异常。',
+  INCIDENT_OPEN: '已有待核验记录。',
   DUPLICATE_ENDPOINT: '入口地址重复。',
   INVALID_URL: '地址无效，只支持公网 http(s) 地址。',
   BLOCKED_ADDRESS: '地址解析到了非公网 IP，已拒绝。',
@@ -500,7 +500,6 @@ function helpText(username: string) {
     '发「取消」结束当前操作。',
     '/app 打开页面 · /me 我的关注与投稿 · /graveyard 逛墓园',
     `群里用 /search 机场名，或输入 <code>@${escape(username)} 机场名</code> 分享卡片。`,
-    '疑似跑路仍待人工核验，花先别买。',
   ].join('\n');
 }
 
@@ -772,7 +771,7 @@ function registerCatalogHandlers(
     await createSubmission(db, config, user, prepareProvider(input, config), ctx.update.update_id);
     await t.reply(
       ctx,
-      '📮 投稿已提交，审核结果会私信通知你。',
+      '📮 投稿已提交',
       markup([miniAppButton(config, '📮 我的投稿', 'submissions', true)]),
     );
   });

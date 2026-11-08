@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { miniAppPath } from '../web/src/lib/telegram.js';
-import { miniAppButton, miniAppLink, providerKeyboard } from '../src/telegram/format.js';
+import {
+  ceremonyCard,
+  ceremonyRichCard,
+  miniAppButton,
+  miniAppLink,
+  providerCard,
+  providerKeyboard,
+  providerRichCard,
+} from '../src/telegram/format.js';
 import { loadConfig } from '../src/config.js';
 import { randomBytes } from 'node:crypto';
 
@@ -58,6 +66,25 @@ describe('Telegram Mini App navigation', () => {
     expect(JSON.stringify(keyboard)).toContain(`startapp=p_${id.replace(/-/g, '')}`);
     expect(JSON.stringify(keyboard)).not.toContain('https://deadstick.example/airports');
     expect(JSON.stringify(keyboard)).not.toContain('web_app');
+  });
+  it('keeps legacy review prose out of public provider and ceremony cards', () => {
+    const provider = {
+      id,
+      name: '<测试机场>',
+      slug: 'test',
+      lifecycle: 'dead',
+      health: 'down',
+      death_at: new Date('2026-11-08T03:28:48Z'),
+      epitaph: '按管理员本次明确确认，将测试机场标记为已跑路。',
+    };
+    for (const render of [providerCard, providerRichCard, ceremonyCard, ceremonyRichCard]) {
+      const text = render(provider);
+      expect(text).toContain('&lt;测试机场&gt;');
+      expect(text).toContain('已跑路');
+      expect(text).toContain('2026-11-08');
+      expect(text).not.toContain(provider.epitaph);
+      expect(text).not.toContain('管理员');
+    }
   });
   it('captures launch data once, strips it from the URL and opens the Telegram destination before routing', async () => {
     const sdk = {

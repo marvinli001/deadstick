@@ -34,9 +34,7 @@ interface EventRow {
   attempts: number;
 }
 export function eventTitle(event: NotificationEvent) {
-  return event.type === 'recovery' && event.manual
-    ? '人工核验：服务恢复'
-    : eventLabels[event.type!];
+  return event.type === 'recovery' && event.manual ? '服务恢复' : eventLabels[event.type!];
 }
 export async function dispatchPolicyNotifications(db: DB, sender: TelegramSender, limit: number) {
   const recipients = await db.query<{ chat_id: string; audience: string }>(
@@ -198,11 +196,9 @@ export async function dispatchPolicyNotifications(db: DB, sender: TelegramSender
               .slice(0, 8)
               .map(
                 (r) =>
-                  `<b>${eventTitle(r.event_meta)}</b>\n${escape(r.name)} · <code>${escape(r.slug)}</code>\n${escape((r.event_meta.summary ?? '').slice(0, 120))}${r.event_meta.evidenceUrls?.length ? `\n核验证据 ${r.event_meta.evidenceUrls.length} 项` : ''}\n${time(r.created_at)}`,
+                  `<b>${eventTitle(r.event_meta)}</b>\n${escape(r.name)} · <code>${escape(r.slug)}</code>${r.event_meta.evidenceUrls?.length ? `\n相关资料 ${r.event_meta.evidenceUrls.length} 项` : ''}\n${time(r.created_at)}`,
               )
-              .join(
-                '\n\n',
-              )}${batch.length > 8 ? `\n\n另有 ${batch.length - 8} 条，已计入本次汇总。` : ''}`,
+              .join('\n\n')}${batch.length > 8 ? `\n\n另有 ${batch.length - 8} 条` : ''}`,
             parse_mode: 'HTML',
             link_preview_options: { is_disabled: true },
           };

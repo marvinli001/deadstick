@@ -15,6 +15,10 @@ export function dateTime(value: string | null | undefined) {
   return `${day(value)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+export function deathNotice(confirmedAt: string | null) {
+  return confirmedAt ? `已跑路 · ${day(confirmedAt)}` : '已跑路';
+}
+
 export function ago(value: string | null | undefined, now = Date.now()) {
   if (!value) return '从未';
   const seconds = Math.round((now - new Date(value).getTime()) / 1000);

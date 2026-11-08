@@ -9,6 +9,7 @@ import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { database } from '../src/db.js';
 import { migrate } from '../src/migrate.js';
+import { bootstrapAdmin } from '../src/auth/bootstrap.js';
 import { decrypt, digest, hashPassword } from '../src/crypto.js';
 
 const connection = process.env.TEST_DATABASE_URL;
@@ -401,6 +402,58 @@ describe.skipIf(!connection)('administrator OAuth MCP', () => {
     ).toBe(200);
     expect((await rpc(second.access_token, 'overview')).statusCode).toBe(401);
   });
+
+  it.each(['email', 'telegram'] as const)(
+    'revokes existing MCP access and refresh tokens when bootstrapping an administrator via %s',
+    async (via) => {
+      if (via === 'telegram')
+        await storage.db.query('UPDATE users SET telegram_id=$1 WHERE id=$2', ['42', adminId]);
+      const auth = await grant();
+      expect((await call(auth.access_token, 'overview')).failed).toBe(false);
+
+      await bootstrapAdmin(
+        storage.db,
+        via === 'email'
+          ? { ADMIN_EMAIL: ' ADMIN@example.com ', ADMIN_PASSWORD: 'bootstrap-password-long' }
+          : { ADMIN_TELEGRAM_ID: '42' },
+      );
+
+      expect((await app.inject({ url: '/auth/me', headers: admin })).statusCode).toBe(401);
+      expect.soft((await rpc(auth.access_token, 'overview')).statusCode).toBe(401);
+      expect
+        .soft(
+          (
+            await app.inject({
+              url: '/admin/providers',
+              headers: { authorization: `Bearer ${auth.access_token}` },
+            })
+          ).statusCode,
+        )
+        .toBe(401);
+      const refreshed = await form('/oauth/token', {
+        grant_type: 'refresh_token',
+        client_id: auth.clientId,
+        refresh_token: auth.refresh_token,
+        resource: `${config.publicUrl}/mcp`,
+      });
+      expect.soft(refreshed.statusCode).toBe(400);
+      expect.soft(refreshed.json().error).toBe('invalid_grant');
+      if (via === 'email') {
+        for (const [password, status] of [
+          ['test-password-long', 401],
+          ['bootstrap-password-long', 200],
+        ] as const) {
+          const login = await app.inject({
+            method: 'POST',
+            url: '/auth/login',
+            payload: { email: 'admin@example.com', password },
+          });
+          expect(login.statusCode).toBe(status);
+          if (status === 200) expect(login.json().user.id).toBe(adminId);
+        }
+      }
+    },
+  );
 
   it('speaks the real SDK protocol and blocks all Telegram, session and privilege management routes', async () => {
     const auth = await grant();

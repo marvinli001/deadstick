@@ -12,7 +12,9 @@ import {
   notifyRevival,
 } from '../telegram/notifications.js';
 
-export const providerColumns = `p.id,p.slug,p.name,p.description,p.tags,p.aliases,p.lifecycle,p.health,p.last_checked_at,p.death_at,p.epitaph,p.created_at,to_char(p.opened_on,'YYYY-MM-DD') AS opened_on,to_char(p.closed_on,'YYYY-MM-DD') AS closed_on`;
+const providerFields = `p.id,p.slug,p.name,p.description,p.tags,p.aliases,p.lifecycle,p.health,p.last_checked_at,p.death_at,p.created_at,to_char(p.opened_on,'YYYY-MM-DD') AS opened_on,to_char(p.closed_on,'YYYY-MM-DD') AS closed_on`;
+export const providerColumns = `${providerFields},p.epitaph`;
+export const publicProviderColumns = `${providerFields},NULL::text AS epitaph`;
 export async function audit(
   db: DB,
   actorId: string | null,
@@ -130,7 +132,7 @@ export async function resolveIncident(
         [
           dead ? 'dead' : 'active',
           dead,
-          dead ? (resolution.epitaph ?? provider.epitaph ?? resolution.reason) : null,
+          dead ? (resolution.epitaph ?? provider.epitaph) : null,
           incident.provider_id,
           reviving,
         ],
@@ -142,7 +144,7 @@ export async function resolveIncident(
     if (reviving) {
       await clearReviewButtons(tx, `incident:${id}`);
       await audit(tx, actorId, 'provider.revive', provider.id, resolution);
-      await notifyRevival(tx, config, provider, resolution.reason);
+      await notifyRevival(tx, config, provider);
     } else await notifyResolution(tx, config, provider, id, resolution);
     return { id, status };
   });
@@ -208,7 +210,7 @@ export async function reviveProvider(
     );
     for (const incident of incidents) await clearReviewButtons(tx, `incident:${incident.id}`);
     await audit(tx, actorId, 'provider.revive', providerId, input);
-    await notifyRevival(tx, config, p, input.reason);
+    await notifyRevival(tx, config, p);
     return { ok: true };
   });
 }

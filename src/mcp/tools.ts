@@ -253,7 +253,7 @@ export const mcpTools = [
   }),
   operation(
     'incident_resolve',
-    '处理异常：确认死亡 dead、恢复 recovered 或排除 dismissed。须填写原因和证据链接。',
+    '处理异常：确认死亡 dead、恢复 recovered 或排除 dismissed。须填写审核备注和证据链接；reason 仅供内部留档，公开状态使用统一文案。',
     'POST',
     '/admin/incidents/:id/resolve',
     { params: Id, body: Resolution },

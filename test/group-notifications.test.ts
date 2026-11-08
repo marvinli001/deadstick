@@ -528,7 +528,53 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('group notification business beh
       { query_enabled: true, enabled: true },
     );
   });
-  it('rechecks current provider/tag/event rules for already queued data and preserves facts in playful digests', async () => {
+  it('limits incident notes to reviewer alerts and omits review prose from public conclusions', async () => {
+    await save(policy());
+    await storage.db.query(
+      "INSERT INTO telegram_chats(id,title,kind) VALUES ('100','Admin','admin')",
+    );
+    await storage.db.query('INSERT INTO follows(user_id,provider_id) VALUES ($1,$2)', [
+      userId,
+      providerId,
+    ]);
+    const p = { id: providerId, name: '机场甲', slug: 'airport-one' };
+    const incidentId = randomUUID();
+    const summary = '管理员提供的页面截图显示官网不可用';
+    const reason = '按管理员本次明确确认，将机场标记为已跑路';
+    await notifyIncidentOpened(storage.db, config, p, incidentId, summary);
+    const alerts = await storage.db.query<{
+      audience: string;
+      payload: unknown;
+      event_meta: unknown;
+    }>('SELECT audience,payload,event_meta FROM notifications');
+    expect(alerts).toHaveLength(3);
+    for (const alert of alerts) {
+      const text = JSON.stringify(alert);
+      if (alert.audience === 'reviewer') {
+        expect(text).toContain(summary);
+        expect(text).toContain(`rv:d:${incidentId}`);
+      } else {
+        expect(text).toContain('检测异常');
+        expect(text).not.toContain(summary);
+      }
+    }
+    await notifyResolution(storage.db, config, p, incidentId, {
+      action: 'dead',
+      reason,
+      evidenceUrls: ['https://evidence.example/notice'],
+    });
+    const notices = await storage.db.query<{ payload: unknown; event_meta: unknown }>(
+      "SELECT payload,event_meta FROM notifications WHERE dedupe_key LIKE 'resolution:%'",
+    );
+    expect(notices).toHaveLength(3);
+    for (const notice of notices) {
+      const text = JSON.stringify(notice);
+      expect(text).toContain('已跑路');
+      expect(text).toContain('https://evidence.example/notice');
+      expect(text).not.toContain(reason);
+    }
+  });
+  it('rechecks current provider/tag/event rules and keeps review notes out of public digests', async () => {
     await save(policy());
     await event('filtered-provider');
     await save(policy({ scope: 'providers', providerIds: [otherId] }));
@@ -553,11 +599,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('group notification business beh
     await dispatchNotifications(storage.db, sender);
     expect(sent()).toHaveLength(1);
     const text = sent()[0]![1].text as string;
-    expect(text).toContain('人工核验：确认跑路');
-    expect(text).toContain('&lt;人工结论&gt;');
+    expect(text).toContain('已跑路');
+    expect(text).not.toContain('人工结论');
+    expect(text).not.toContain('人工证据核验');
     expect(text).toContain('机场 &lt;甲&gt;');
     expect(text).not.toContain('机场有新剧情，结论看上面。');
-    expect(text).toContain('核验证据 1 项');
+    expect(text).toContain('相关资料 1 项');
     await dispatchNotifications(storage.db, sender);
     expect(sent()).toHaveLength(1);
   });
@@ -811,7 +858,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('group notification business beh
     });
     await dispatchNotifications(storage.db, sender);
     expect(sent()).toHaveLength(1);
-    expect(JSON.stringify(sent()[0]![1])).toContain('人工核验：服务恢复');
+    expect(JSON.stringify(sent()[0]![1])).toContain('服务恢复');
+    expect(JSON.stringify(sent()[0]![1])).not.toContain('人工核验恢复');
     await notifyIncidentOpened(storage.db, config, p, randomUUID(), '新异常');
     await app.inject({
       url: endpoint,

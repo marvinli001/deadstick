@@ -71,7 +71,14 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
       const valid = await verifyPassword(req.body.password, user?.password_hash ?? dummy);
       if (!user || !valid || !user.password_hash)
         throw new AppError(401, 'INVALID_CREDENTIALS', 'Invalid email or password');
-      return newSession(db, config, reply, user);
+      return db.transaction(async (tx) => {
+        const [current] = await tx.query<User>(
+          'SELECT * FROM users WHERE id=$1 AND password_hash=$2 FOR NO KEY UPDATE',
+          [user.id, user.password_hash],
+        );
+        if (!current) throw new AppError(401, 'INVALID_CREDENTIALS', 'Invalid email or password');
+        return newSession(tx, config, reply, current);
+      });
     },
   );
   api.get('/auth/me', { preHandler: authenticated }, async (req, reply) => {
@@ -157,18 +164,24 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
         !(await verifyPassword(req.body.currentPassword, user.password_hash))
       )
         throw new AppError(401, 'INVALID_CREDENTIALS', 'Current password is invalid');
-      await db.transaction(async (tx) => {
+      return db.transaction(async (tx) => {
+        const [current] = await tx.query<User>(
+          'SELECT * FROM users WHERE id=$1 AND password_hash=$2 FOR NO KEY UPDATE',
+          [req.user!.id, user.password_hash],
+        );
+        if (!current) throw new AppError(401, 'INVALID_CREDENTIALS', 'Current password is invalid');
         await tx.query('UPDATE users SET password_hash=$1 WHERE id=$2', [
           await hashPassword(req.body.newPassword),
           req.user!.id,
         ]);
         await tx.query('DELETE FROM sessions WHERE user_id=$1', [req.user!.id]);
+        await tx.query('DELETE FROM mcp_codes WHERE user_id=$1', [req.user!.id]);
         await tx.query(
           'UPDATE mcp_connections SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL',
           [req.user!.id],
         );
+        return newSession(tx, config, reply, current);
       });
-      return newSession(db, config, reply, req.user!);
     },
   );
   async function start(
