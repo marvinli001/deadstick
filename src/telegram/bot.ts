@@ -49,6 +49,12 @@ import {
 import { views, type View } from './views.js';
 import { commandMenus, commandsFor } from './commands.js';
 import { createConversation } from './conversation.js';
+import {
+  recordGroupMembership,
+  requireGroupActive,
+  cancelGroupNotifications,
+  type TelegramGroup,
+} from './groups.js';
 export { commandMenus } from './commands.js';
 
 export const allowedUpdates: Array<Exclude<keyof Update, 'update_id'>> = [
@@ -235,7 +241,11 @@ export function createBot(db: DB, config: Config, botInfo?: UserFromGetMe) {
       next = String(ctx.message.migrate_to_chat_id);
     await db.transaction(async (tx) => {
       await tx.query(
-        "INSERT INTO telegram_chats(id,title,kind,topic_id,enabled,query_enabled,notification_policy,manager_telegram_id) SELECT $1,title,kind,NULL,enabled,query_enabled,notification_policy,manager_telegram_id FROM telegram_chats WHERE id=$2 AND kind='group' ON CONFLICT(id) DO NOTHING",
+        `INSERT INTO telegram_chats(id,title,kind,topic_id,enabled,query_enabled,notification_policy,manager_telegram_id,
+          approval_status,bot_member_status,bot_can_send,guest_enabled,username,inviter_telegram_id,inviter_name,joined_at,left_at,reviewed_by,reviewed_at,admin_note)
+          SELECT $1,title,kind,NULL,enabled,query_enabled,notification_policy,manager_telegram_id,
+          approval_status,bot_member_status,bot_can_send,guest_enabled,username,inviter_telegram_id,inviter_name,joined_at,left_at,reviewed_by,reviewed_at,admin_note
+          FROM telegram_chats WHERE id=$2 AND kind='group' ON CONFLICT(id) DO NOTHING`,
         [next, previous],
       );
       await tx.query("DELETE FROM telegram_chats WHERE id=$1 AND kind='group'", [previous]);
@@ -245,6 +255,22 @@ export function createBot(db: DB, config: Config, botInfo?: UserFromGetMe) {
       );
       await audit(tx, null, 'telegram.migrate', previous, { chatId: next });
     });
+  });
+  bot.use(async (ctx, next) => {
+    if (isGroupChat(ctx.chat?.type) && !ctx.myChatMember && !ctx.update.guest_message) {
+      const chat = ctx.chat!;
+      const id = String(chat.id);
+      await db.query(
+        `INSERT INTO telegram_chats(id,title,kind,enabled,username) VALUES ($1,$2,'group',false,$3)
+         ON CONFLICT(id) DO UPDATE SET title=excluded.title,username=excluded.username,updated_at=now()`,
+        [
+          id,
+          ('title' in chat ? chat.title : id).slice(0, 255),
+          'username' in chat ? (chat.username ?? null) : null,
+        ],
+      );
+    }
+    await next();
   });
   // Membership changes must be processed even when the person removing the bot is disabled.
   bot.use(async (ctx, next) => {
@@ -266,19 +292,28 @@ export function createBot(db: DB, config: Config, botInfo?: UserFromGetMe) {
 
   const tools: Tools = { me, reply, show, answer, deepLink, staff };
   registerSetupHandlers(bot, db, config, tools);
-  registerGuestMode(bot, config, v);
 
-  // Group whitelist: everything below only runs in private chats and bound groups.
+  // Guest mentions outside joined groups remain read-only; managed groups use the same approval gate.
   bot.use(async (ctx, next) => {
     if (isGroupChat(ctx.chat?.type)) {
-      const [allowed] = await db.query(
-        "SELECT id FROM telegram_chats WHERE id=$1 AND kind='group' AND enabled AND query_enabled",
+      const [group] = await db.query<TelegramGroup>(
+        "SELECT * FROM telegram_chats WHERE id=$1 AND kind='group'",
         [String(ctx.chat!.id)],
       );
-      if (!allowed) return;
+      if (ctx.update.guest_message && !group) return next();
+      if (
+        !group?.enabled ||
+        group.approval_status !== 'approved' ||
+        !group.bot_can_send ||
+        !(ctx.update.guest_message ? group.guest_enabled : group.query_enabled)
+      ) {
+        if (ctx.callbackQuery) await answer(ctx, '本群暂未开放此功能', true);
+        return;
+      }
     } else if (ctx.chat && ctx.chat.type !== 'private') return;
     await next();
   });
+  registerGuestMode(bot, config, v);
 
   const conversation = createConversation(db, config, v, tools);
   registerCatalogHandlers(bot, db, config, v, tools, conversation);
@@ -310,46 +345,30 @@ function registerSetupHandlers(bot: Bot, db: DB, config: Config, t: Tools) {
     if (!isGroupChat(chat.type)) return;
     const id = String(chat.id),
       title = escape('title' in chat ? (chat.title ?? id) : id);
-    const [bound] = await db.query<{ enabled: boolean }>(
-      "SELECT enabled FROM telegram_chats WHERE id=$1 AND kind='group'",
-      [id],
-    );
     const gone = ['left', 'kicked'];
+    const joined = gone.includes(old_chat_member.status) && !gone.includes(new_chat_member.status);
+    const group = await recordGroupMembership(db, chat, new_chat_member, joined ? from : undefined);
     if (gone.includes(new_chat_member.status)) {
-      if (!bound?.enabled) return;
-      await db.query('UPDATE telegram_chats SET enabled=false WHERE id=$1', [id]);
       await audit(db, null, 'telegram.removed', id);
       await notifyAdmins(db, `chat-removed:${id}:${ctx.update.update_id}`, {
-        text: `⚠️ <b>机器人已离开通报群</b>\n${title} · <code>${id}</code>\n已停用该群的通报，重新加入后用 /bind 恢复。`,
+        text: `⚠️ <b>机器人已离开群组</b>\n${title} · <code>${id}</code>\n本群功能已停用，重新加入后需要审批。`,
       });
       return;
     }
-    if (bound?.enabled || !gone.includes(old_chat_member.status)) return;
-    await t.reply(
-      ctx,
-      '本群管理员可用 /groupsetup 配置查询和通知。',
-      markup([miniAppButton(config, '本群设置', `group_${id.slice(1)}`)]),
-    );
+    if (!joined) return;
+    await audit(db, null, 'telegram.group.joined', id, { inviterId: String(from.id) });
+    if (group.approval_status === 'rejected') {
+      await ctx.api.leaveChat(chat.id);
+      await recordGroupMembership(db, chat, { status: 'left' });
+      return;
+    }
     await notifyAdmins(db, `chat-added:${id}:${ctx.update.update_id}`, {
-      text: `➕ <b>机器人被加入新群</b>\n${title} · <code>${id}</code>\n邀请人：${escape(from.first_name)}\n绑定前不会响应群命令，也不会收到通报。`,
-      reply_markup: markup([
-        [{ text: '📣 绑定为通报群', callback_data: `bind:${id}`, style: 'primary' }],
-      ]),
+      text: `➕ <b>群组等待审批</b>\n${title} · <code>${id}</code>\n邀请人：${escape(from.first_name)}\n同意前不会响应群命令或发送通知。`,
+      reply_markup: markup([miniAppButton(config, '审核群组', 'groups', true)]),
     });
   });
   bot.callbackQuery(/^bind:(-?\d{1,20})$/, async (ctx) => {
-    const chat = await ctx.api.getChat(ctx.match[1]!);
-    if (!isGroupChat(chat.type)) return void (await t.answer(ctx, '这不是群组', true));
-    if (!(await groupAdmin(ctx, chat.id)))
-      return void (await t.answer(ctx, '还需要该群的管理员权限', true));
-    const admin = await t.me(ctx);
-    await bindGroup(db, admin.id, String(chat.id), chat.title ?? String(chat.id), null);
-    await ctx
-      .editMessageReplyMarkup({
-        reply_markup: markup([[{ text: '✅ 已绑定为通报群', disabled: {} }]]),
-      })
-      .catch(ignore400);
-    await t.answer(ctx, '已绑定');
+    await t.answer(ctx, '请到后台「群组」审批，旧绑定按钮已停用', true);
   });
   bot.command(['bind', 'unbind', 'groupsetup'], async (ctx) => {
     if (!isGroupChat(ctx.chat.type))
@@ -365,12 +384,16 @@ function registerSetupHandlers(bot: Bot, db: DB, config: Config, t: Tools) {
         markup([miniAppButton(config, '配置本群', `group_${id.slice(1)}`)]),
       ));
     if (ctx.message!.text.split(/[\s@]/)[0] === '/unbind') {
-      await db.query(
-        "UPDATE telegram_chats SET enabled=false,query_enabled=false,notification_policy=jsonb_set(notification_policy,'{enabled}','false') WHERE id=$1 AND kind='group'",
-        [id],
-      );
+      await db.transaction(async (tx) => {
+        await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,7))', [id]);
+        await tx.query(
+          "UPDATE telegram_chats SET query_enabled=false,guest_enabled=false,notification_policy=jsonb_set(notification_policy,'{enabled}','false'),updated_at=now() WHERE id=$1 AND kind='group'",
+          [id],
+        );
+        await cancelGroupNotifications(tx, id);
+      });
       await audit(db, admin.id, 'telegram.unbind', id);
-      return void (await t.reply(ctx, '已取消本群通报，机器人不再响应本群命令。'));
+      return void (await t.reply(ctx, '已关闭本群查询和通知。'));
     }
     const topic = ctx.message!.is_topic_message ? ctx.message!.message_thread_id! : null;
     await bindGroup(db, admin.id, id, ('title' in ctx.chat && ctx.chat.title) || id, topic);
@@ -389,8 +412,10 @@ async function bindGroup(
   topicId: number | null,
 ) {
   await db.transaction(async (tx) => {
+    await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,7))', [id]);
+    await requireGroupActive(tx, id);
     await tx.query(
-      "INSERT INTO telegram_chats(id,title,kind,topic_id,enabled,manager_telegram_id) VALUES ($1,$2,'group',$3,true,(SELECT telegram_id FROM users WHERE id=$4)) ON CONFLICT(id) DO UPDATE SET title=excluded.title,kind='group',topic_id=excluded.topic_id,enabled=true,query_enabled=true,manager_telegram_id=excluded.manager_telegram_id",
+      "UPDATE telegram_chats SET title=$2,topic_id=$3,query_enabled=true,manager_telegram_id=(SELECT telegram_id FROM users WHERE id=$4),updated_at=now() WHERE id=$1 AND kind='group'",
       [id, title.slice(0, 255), topicId, actorId],
     );
     await audit(tx, actorId, 'telegram.bind', id, { kind: 'group', topicId, via: 'bot' });

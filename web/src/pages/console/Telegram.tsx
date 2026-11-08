@@ -22,16 +22,13 @@ import { PageHead, Table, usePaged, type Column } from './shared';
 import styles from './console.module.css';
 import TelegramSettings from './TelegramSettings';
 
-const kinds = [
-  { value: 'group', label: '群组' },
-  { value: 'admin', label: '管理员私聊' },
-];
+const kinds = [{ value: 'admin', label: '管理员私聊' }];
 
 function BindForm() {
   const client = useQueryClient();
   const { toast } = useToastStack();
   const [id, setId] = useState('');
-  const [kind, setKind] = useState<TelegramChat['kind']>('group');
+  const [kind, setKind] = useState<TelegramChat['kind']>('admin');
   const [topic, setTopic] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -98,7 +95,10 @@ function Chats() {
   const { toast } = useToastStack();
   const chats = useQuery({
     queryKey: ['admin', 'telegram', 'chats'],
-    queryFn: () => api<Page<TelegramChat>>('/admin/telegram/chats').then((r) => r.items),
+    queryFn: () =>
+      api<Page<TelegramChat>>('/admin/telegram/chats').then((r) =>
+        r.items.filter((chat) => chat.kind === 'admin'),
+      ),
   });
   const refresh = () => client.invalidateQueries({ queryKey: ['admin', 'telegram', 'chats'] });
   const onError = (error: unknown) => toast({ type: 'error', title: errorText(error) });
@@ -361,7 +361,9 @@ function BotApi() {
 export default function Telegram() {
   return (
     <>
-      <PageHead title="Telegram" />
+      <PageHead title="Telegram">
+        <Link to="/console/groups">群组管理</Link>
+      </PageHead>
       <Tabs defaultValue="settings" className={styles.tabs}>
         <TabsList aria-label="Telegram">
           <TabsTrigger value="settings">配置</TabsTrigger>

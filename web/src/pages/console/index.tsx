@@ -8,6 +8,7 @@ import {
   Inbox,
   ListChecks,
   MessageSquare,
+  MessagesSquare,
   Plug,
   Plane,
   Send,
@@ -33,6 +34,7 @@ import Settings from './Settings';
 import Notifications from './Notifications';
 import Audit from './Audit';
 import Telegram from './Telegram';
+import Groups from './Groups';
 import Mcp from './Mcp';
 import styles from './console.module.css';
 
@@ -69,6 +71,7 @@ const system: Item[] = [
   { to: '/console/audit', label: '审计', icon: icon(FileClock) },
   { to: '/console/mcp', label: 'MCP', icon: icon(Plug) },
   { to: '/console/telegram', label: 'Telegram', icon: icon(Send) },
+  { to: '/console/groups', label: '群组', icon: icon(MessagesSquare), queue: 'groups' },
 ];
 
 function NavGroup({ items }: { items: Item[] }) {
@@ -165,6 +168,14 @@ export default function Console() {
               element={
                 <AdminOnly>
                   <Mcp />
+                </AdminOnly>
+              }
+            />
+            <Route
+              path="groups"
+              element={
+                <AdminOnly>
+                  <Groups />
                 </AdminOnly>
               }
             />

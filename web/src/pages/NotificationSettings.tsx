@@ -2,11 +2,13 @@ import { useState, type FormEvent } from 'react';
 import { useParams } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/arc/button/button';
+import { Alert } from '@/components/arc/alert/alert';
 import { Checkbox } from '@/components/arc/checkbox/checkbox';
 import { Input } from '@/components/arc/input/input';
 import { Select } from '@/components/arc/select/select';
 import { Switch } from '@/components/arc/switch/switch';
 import { TagInput } from '@/components/arc/tag-input/tag-input';
+import { Textarea } from '@/components/arc/textarea/textarea';
 import { useToastStack } from '@/components/arc/toast-stack/toast-stack';
 import { useDebounced } from '@/components/AirportSearch';
 import { ErrorView, Loading } from '@/components/states';
@@ -17,7 +19,7 @@ import styles from './NotificationSettings.module.css';
 const labels = {
   anomaly: '异常',
   recovery: '恢复',
-  dead: '人工确认跑路',
+  dead: '已跑路',
   dismissed: '排除异常',
   revival: '复活',
 };
@@ -38,11 +40,14 @@ interface Policy {
   mergeSeconds: number;
   tone: 'restrained' | 'playful';
 }
-interface Settings {
+export interface NotificationSettings {
   chat_id?: string;
   title?: string;
   active?: boolean;
   query_enabled?: boolean;
+  guest_enabled?: boolean;
+  approval_status?: 'pending' | 'approved' | 'rejected';
+  admin_note?: string;
   topic_id?: number | null;
   policy: Policy;
   presets: Record<string, Policy>;
@@ -96,18 +101,24 @@ function ProviderPicker({ ids, onChange }: { ids: string[]; onChange: (ids: stri
   );
 }
 
-function SettingsForm({
+export function SettingsForm({
   initial,
   endpoint,
   group = false,
+  admin = false,
+  onSaved,
 }: {
-  initial: Settings;
+  initial: NotificationSettings;
   endpoint: string;
   group?: boolean;
+  admin?: boolean;
+  onSaved?: () => void;
 }) {
   const { toast } = useToastStack();
   const [policy, setPolicy] = useState(initial.policy);
   const [queries, setQueries] = useState(initial.query_enabled ?? false);
+  const [guests, setGuests] = useState(initial.guest_enabled ?? true);
+  const [note, setNote] = useState(initial.admin_note ?? '');
   const [topic, setTopic] = useState(initial.topic_id?.toString() ?? '');
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -121,13 +132,20 @@ function SettingsForm({
     setBusy(true);
     setError(null);
     try {
-      await api(endpoint, {
+      const result = await api<{ active?: boolean }>(endpoint, {
         method: 'PUT',
         body: group
-          ? { queryEnabled: queries, topicId: topic ? Number(topic) : null, policy }
+          ? {
+              queryEnabled: queries,
+              guestEnabled: guests,
+              topicId: topic ? Number(topic) : null,
+              policy,
+              ...(admin ? { note } : {}),
+            }
           : policy,
       });
-      setSaved(true);
+      setSaved(result.active ?? true);
+      onSaved?.();
       toast({ type: 'success', title: '已保存' });
     } catch (err) {
       setError(errorText(err));
@@ -139,7 +157,10 @@ function SettingsForm({
     setTesting(true);
     setError(null);
     try {
-      await api(`${endpoint}/test`, { method: 'POST', body: {} });
+      await api(`${admin ? `/telegram/groups/${initial.chat_id}` : endpoint}/test`, {
+        method: 'POST',
+        body: {},
+      });
       toast({ type: 'success', title: '测试消息已排队' });
     } catch (err) {
       setError(errorText(err));
@@ -154,7 +175,25 @@ function SettingsForm({
           {error}
         </p>
       )}
-      {group && <Switch label="允许本群查询" checked={queries} onCheckedChange={setQueries} />}
+      {group && (
+        <>
+          {!initial.active && (
+            <Alert
+              open
+              tone="warning"
+              title={
+                initial.approval_status === 'pending'
+                  ? '待审批，配置将在启用后生效'
+                  : initial.approval_status === 'rejected'
+                    ? '本群已被拒绝'
+                    : '本群已停用'
+              }
+            />
+          )}
+          <Switch label="群命令与互动" checked={queries} onCheckedChange={setQueries} />
+          <Switch label="Guest 查询" checked={guests} onCheckedChange={setGuests} />
+        </>
+      )}
       <Switch
         label={group ? '主动通知本群' : '关注动态私信'}
         checked={policy.enabled}
@@ -186,7 +225,7 @@ function SettingsForm({
             value={policy.conclusionsOnly ? 'conclusions' : 'all'}
             options={[
               { value: 'all', label: '异常与人工结论' },
-              { value: 'conclusions', label: '只收人工结论' },
+              { value: 'conclusions', label: '人工结论' },
             ]}
             onValueChange={(v) => change('conclusionsOnly', v === 'conclusions')}
           />
@@ -247,7 +286,7 @@ function SettingsForm({
             value={policy.mode}
             options={[
               { value: 'realtime', label: '实时' },
-              { value: 'digest', label: '定时汇总 · 无变化不发' },
+              { value: 'digest', label: '定时汇总' },
             ]}
             onValueChange={(v) => change('mode', v as Policy['mode'])}
           />
@@ -348,11 +387,18 @@ function SettingsForm({
               <blockquote className={styles.preview}>
                 <strong>{titles[sample]}</strong>
                 <span>示例机场</span>
-                {policy.tone === 'playful' && <span>机场有新剧情，结论看上面。</span>}
               </blockquote>
             </div>
           </details>
         </>
+      )}
+      {admin && (
+        <Textarea
+          label="管理备注"
+          maxLength={1000}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+        />
       )}
       <div className={styles.actions}>
         <Button type="submit" loading={busy}>
@@ -379,7 +425,7 @@ export function GroupSettings() {
   const endpoint = `/telegram/groups/${encodeURIComponent(chatId ?? '')}`;
   const settings = useQuery({
     queryKey: ['group-settings', chatId],
-    queryFn: () => api<Settings>(endpoint),
+    queryFn: () => api<NotificationSettings>(endpoint),
     retry: false,
   });
   return (
@@ -401,7 +447,7 @@ export function PersonalNotificationSettings() {
   const endpoint = '/telegram/notifications/preferences';
   const settings = useQuery({
     queryKey: ['notification-preferences'],
-    queryFn: () => api<Settings>(endpoint),
+    queryFn: () => api<NotificationSettings>(endpoint),
   });
   if (settings.isPending) return <Loading />;
   if (settings.isError)

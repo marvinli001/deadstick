@@ -19,6 +19,7 @@ const queuePaths = {
   incidents: ['/admin/incidents', 'open'],
   submissions: ['/admin/submissions', 'pending'],
   memorials: ['/admin/memorials', 'pending'],
+  groups: ['/admin/telegram/groups', 'pending'],
 } as const;
 export type Queue = keyof typeof queuePaths;
 

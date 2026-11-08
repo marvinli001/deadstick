@@ -251,7 +251,7 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
   it('detects failure, deduplicates alerts, requires evidence, and supports cemetery interactions', async () => {
     const p = await provider();
     await storage.db.query(
-      "INSERT INTO telegram_chats(id,title,kind) VALUES ('-100123','Allowed','group'),('100','Admin','admin')",
+      "INSERT INTO telegram_chats(id,title,kind,approval_status) VALUES ('-100123','Allowed','group','approved'),('100','Admin','admin','approved')",
     );
     await check(p.id, false);
     expect(
@@ -428,7 +428,7 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
     async (failedKind) => {
       const p = await provider();
       await storage.db.query(
-        "INSERT INTO telegram_chats(id,title,kind) VALUES ('-100123','Allowed','group'),('100','Admin','admin')",
+        "INSERT INTO telegram_chats(id,title,kind,approval_status) VALUES ('-100123','Allowed','group','approved'),('100','Admin','admin','approved')",
       );
       await check(p.id, false);
       const settings = await monitorSettings(storage.db);
@@ -1367,7 +1367,7 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
     await bot.handleUpdate(command);
     expect(calls).toHaveLength(0);
     await storage.db.query(
-      "INSERT INTO telegram_chats(id,title,kind) VALUES ('-100123','Allowed','group')",
+      "INSERT INTO telegram_chats(id,title,kind,approval_status) VALUES ('-100123','Allowed','group','approved') ON CONFLICT(id) DO UPDATE SET approval_status='approved',enabled=true",
     );
     await bot.handleUpdate({ ...command, update_id: 2 });
     expect(calls).toContain('sendMessage');
@@ -1426,10 +1426,11 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       ).statusCode,
     ).toBe(403);
   });
-  it('publishes a valid OpenAPI description and DB readiness', async () => {
-    const response = await app.inject({ url: '/openapi.json' });
-    expect(response.statusCode).toBe(200);
-    expect(Object.keys(response.json().paths).length).toBeGreaterThan(35);
+  it('does not publish API documentation and retains DB readiness', async () => {
+    for (const url of ['/docs', '/docs/', '/docs/json', '/docs/yaml', '/openapi.json']) {
+      const response = await app.inject({ url });
+      expect(response.statusCode, url).toBe(404);
+    }
     expect((await app.inject({ url: '/health/ready' })).json()).toEqual({ ok: true });
   });
   function testBot(botConfig = config) {
@@ -1519,7 +1520,7 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
     const p = await provider();
     await storage.db.query("UPDATE providers SET name='<b>Evil</b> & co' WHERE id=$1", [p.id]);
     await storage.db.query(
-      "INSERT INTO telegram_chats(id,title,kind) VALUES ('-100123','Allowed','group')",
+      "INSERT INTO telegram_chats(id,title,kind,approval_status) VALUES ('-100123','Allowed','group','approved')",
     );
     const { bot, calls } = testBot();
     await bot.handleUpdate({
@@ -1603,11 +1604,15 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       { chat_id: '100', payload: { message_id: 55, reply_markup: { inline_keyboard: [] } } },
     ]);
   });
-  it('binds groups from the bot and alerts administrators when added to a new group', async () => {
+  it('records new groups for site approval before group administrators can bind them', async () => {
     await storage.db.query(
       "INSERT INTO telegram_chats(id,title,kind) VALUES ('100','Admin','admin')",
     );
-    const { bot, calls } = testBot();
+    const { bot, calls } = testBot({
+      ...config,
+      publicUrl: 'https://deadstick.example',
+      botUsername: 'deadstick_test_bot',
+    });
     const group = {
       id: -100777,
       type: 'supergroup' as const,
@@ -1634,7 +1639,7 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       'SELECT chat_id,payload FROM notifications',
     );
     expect(alert!.chat_id).toBe('100');
-    expect(JSON.stringify(alert!.payload)).toContain('bind:-100777');
+    expect(JSON.stringify(alert!.payload)).toContain('tgWebAppStartParam=groups');
     const bind = (update_id: number, from: typeof tester) => ({
       update_id,
       message: {
@@ -1649,10 +1654,21 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       },
     });
     await bot.handleUpdate(bind(2, tester) as never);
-    expect(await storage.db.query("SELECT id FROM telegram_chats WHERE kind='group'")).toHaveLength(
-      0,
-    );
+    expect(
+      (
+        await storage.db.query(
+          "SELECT approval_status,enabled FROM telegram_chats WHERE kind='group'",
+        )
+      )[0],
+    ).toEqual({ approval_status: 'pending', enabled: false });
     await bot.handleUpdate(bind(3, reviewerUser) as never);
+    expect(
+      (await storage.db.query("SELECT enabled FROM telegram_chats WHERE kind='group'"))[0]!.enabled,
+    ).toBe(false);
+    await storage.db.query(
+      "UPDATE telegram_chats SET approval_status='approved',enabled=true WHERE id='-100777'",
+    );
+    await bot.handleUpdate(bind(4, reviewerUser) as never);
     expect(
       (
         await storage.db.query("SELECT id,topic_id,enabled FROM telegram_chats WHERE kind='group'")
@@ -1667,7 +1683,7 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
   it('keeps rich group navigation in the same topic and updates personal overlays without editing public cards', async () => {
     const p = await provider();
     await storage.db.query(
-      "INSERT INTO telegram_chats(id,title,kind,topic_id) VALUES ('-100123','Forum','group',12)",
+      "INSERT INTO telegram_chats(id,title,kind,topic_id,approval_status) VALUES ('-100123','Forum','group',12,'approved')",
     );
     const { bot, calls } = testBot();
     const message = {
@@ -1732,7 +1748,7 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       show_alert: true,
     });
   });
-  it('requires current group administrator rights to bind from commands or old invitation buttons', async () => {
+  it('requires group administrator rights and does not approve groups through old invitation buttons', async () => {
     const { bot, calls } = testBot();
     bot.api.config.use(async (prev, method, payload, signal) =>
       method === 'getChatAdministrators'
@@ -1745,18 +1761,25 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       }) as never,
     );
     await bot.handleUpdate(press(2, reviewerUser, 'bind:-100777'));
-    expect(await storage.db.query("SELECT id FROM telegram_chats WHERE kind='group'")).toHaveLength(
-      0,
-    );
+    expect(
+      (
+        await storage.db.query(
+          "SELECT approval_status,enabled FROM telegram_chats WHERE kind='group'",
+        )
+      )[0],
+    ).toEqual({ approval_status: 'pending', enabled: false });
     expect(calls.some((c) => c.method === 'editMessageReplyMarkup')).toBe(false);
   });
   it('migrates group bindings and queued notices even when a service message comes from a bot', async () => {
     await storage.db.query(
-      "INSERT INTO telegram_chats(id,title,kind) VALUES ('-777','Group','group')",
+      "INSERT INTO telegram_chats(id,title,kind,approval_status) VALUES ('-777','Group','group','approved')",
     );
     await enqueue(storage.db, 'before-migration', '-777', { text: 'Queued' }, null, {
       audience: 'group',
     });
+    await storage.db.query(
+      `UPDATE telegram_chats SET notification_policy='{"enabled":true}' WHERE id='-777'`,
+    );
     const { bot } = testBot();
     await bot.handleUpdate({
       update_id: 1,
@@ -1777,7 +1800,7 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
   });
   it('does not deliver queued review data after demotion or group unbinding', async () => {
     await storage.db.query(
-      "INSERT INTO telegram_chats(id,title,kind) VALUES ('100','Admin','admin'),('-100123','Group','group')",
+      "INSERT INTO telegram_chats(id,title,kind,approval_status) VALUES ('100','Admin','admin','approved'),('-100123','Group','group','approved')",
     );
     await enqueue(
       storage.db,
@@ -1807,7 +1830,7 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
   it('delivers rich incident notices to forum topics and removes resolved review actions before delivery', async () => {
     const p = await provider();
     await storage.db.query(
-      "INSERT INTO telegram_chats(id,title,kind,topic_id) VALUES ('100','Admin','admin',NULL),('-100123','Group','group',12)",
+      "INSERT INTO telegram_chats(id,title,kind,topic_id,approval_status) VALUES ('100','Admin','admin',NULL,'approved'),('-100123','Group','group',12,'approved')",
     );
     await storage.db.query(
       `UPDATE telegram_chats SET notification_policy='{"enabled":true}' WHERE kind='group'`,

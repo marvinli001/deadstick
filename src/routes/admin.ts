@@ -15,26 +15,23 @@ import {
 } from '../catalog/service.js';
 import { Id, MonitorSettings, Page, Resolution } from '../catalog/schemas.js';
 import { enqueue, type TelegramSender } from '../telegram/notifications.js';
+import { requireBotMembership } from '../telegram/group-settings.js';
+import { cancelGroupNotifications } from '../telegram/groups.js';
 
 export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender?: TelegramSender) {
   const api = app.withTypeProvider<TypeBoxTypeProvider>();
-  api.get(
-    '/admin/telegram/notifications',
-    { preHandler: reviewer, schema: { tags: ['telegram'] } },
-    async (req) => {
-      const [row] = await db.query<{ enabled: boolean }>(
-        "SELECT enabled FROM telegram_chats WHERE id=$1 AND kind='admin'",
-        [req.user!.telegram_id],
-      );
-      return { enabled: row?.enabled ?? false };
-    },
-  );
+  api.get('/admin/telegram/notifications', { preHandler: reviewer }, async (req) => {
+    const [row] = await db.query<{ enabled: boolean }>(
+      "SELECT enabled FROM telegram_chats WHERE id=$1 AND kind='admin'",
+      [req.user!.telegram_id],
+    );
+    return { enabled: row?.enabled ?? false };
+  });
   api.put(
     '/admin/telegram/notifications',
     {
       preHandler: reviewer,
       schema: {
-        tags: ['telegram'],
         body: Type.Object({ enabled: Type.Boolean() }, { additionalProperties: false }),
       },
     },
@@ -51,29 +48,23 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
       return { enabled: req.body.enabled };
     },
   );
-  api.get(
-    '/admin/health',
-    { preHandler: administrator, schema: { tags: ['admin'] } },
-    async () => ({
-      workers: await db.query(
-        "SELECT id,last_seen_at,last_seen_at>now()-interval '30 seconds' AS healthy FROM worker_heartbeats ORDER BY last_seen_at DESC",
-      ),
-      checks: await db.query(
-        'SELECT status,count(*)::int AS count FROM check_jobs GROUP BY status',
-      ),
-      notifications: await db.query(
-        'SELECT status,count(*)::int AS count FROM notifications GROUP BY status',
-      ),
-    }),
-  );
+  api.get('/admin/health', { preHandler: administrator }, async () => ({
+    workers: await db.query(
+      "SELECT id,last_seen_at,last_seen_at>now()-interval '30 seconds' AS healthy FROM worker_heartbeats ORDER BY last_seen_at DESC",
+    ),
+    checks: await db.query('SELECT status,count(*)::int AS count FROM check_jobs GROUP BY status'),
+    notifications: await db.query(
+      'SELECT status,count(*)::int AS count FROM notifications GROUP BY status',
+    ),
+  }));
   api.get(
     '/admin/settings/monitor',
-    { preHandler: administrator, schema: { tags: ['admin'] } },
+    { preHandler: administrator },
     async () => (await db.query("SELECT value FROM settings WHERE key='monitor'"))[0]!.value,
   );
   api.put(
     '/admin/settings/monitor',
-    { preHandler: administrator, schema: { tags: ['admin'], body: MonitorSettings } },
+    { preHandler: administrator, schema: { body: MonitorSettings } },
     async (req) =>
       db.transaction(async (tx) => {
         await tx.query("UPDATE settings SET value=$1 WHERE key='monitor'", [
@@ -88,7 +79,6 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
     {
       preHandler: reviewer,
       schema: {
-        tags: ['admin'],
         querystring: Type.Object({
           ...Page,
           id: Type.Optional(Id.properties.id),
@@ -117,7 +107,7 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
   );
   api.post(
     '/admin/incidents/:id/resolve',
-    { preHandler: reviewer, schema: { tags: ['admin'], params: Id, body: Resolution } },
+    { preHandler: reviewer, schema: { params: Id, body: Resolution } },
     (req) => resolveIncident(db, config, req.params.id, req.body, req.user!.id),
   );
   api.post(
@@ -125,7 +115,6 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
     {
       preHandler: reviewer,
       schema: {
-        tags: ['admin'],
         params: Id,
         body: Type.Object(
           { summary: Type.String({ minLength: 3, maxLength: 2000 }) },
@@ -140,7 +129,6 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
     {
       preHandler: reviewer,
       schema: {
-        tags: ['admin'],
         params: Id,
         body: Type.Object(
           {
@@ -161,7 +149,7 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
     {
       preHandler: reviewer,
       config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
-      schema: { tags: ['admin'], params: Id },
+      schema: { params: Id },
     },
     async (req) =>
       db.transaction(async (tx) => {
@@ -197,7 +185,6 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
     {
       preHandler: reviewer,
       schema: {
-        tags: ['admin'],
         querystring: Type.Object({
           ...Page,
           status: Type.Optional(
@@ -220,14 +207,14 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
   );
   api.get(
     '/admin/checks/:id/results',
-    { preHandler: reviewer, schema: { tags: ['admin'], params: Id } },
+    { preHandler: reviewer, schema: { params: Id } },
     async (req) => ({
       items: await db.query('SELECT * FROM endpoint_results WHERE run_id=$1', [req.params.id]),
     }),
   );
   api.get(
     '/admin/notifications',
-    { preHandler: administrator, schema: { tags: ['admin'], querystring: Type.Object(Page) } },
+    { preHandler: administrator, schema: { querystring: Type.Object(Page) } },
     async (req) => ({
       items: await db.query(
         'SELECT id,chat_id,topic_id,status,attempts,error_code,created_at,sent_at FROM notifications ORDER BY created_at DESC LIMIT $1 OFFSET $2',
@@ -237,7 +224,7 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
   );
   api.post(
     '/admin/notifications/:id/retry',
-    { preHandler: administrator, schema: { tags: ['admin'], params: Id } },
+    { preHandler: administrator, schema: { params: Id } },
     async (req) => {
       required(
         (
@@ -255,7 +242,6 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
     {
       preHandler: reviewer,
       schema: {
-        tags: ['admin'],
         querystring: Type.Object({
           ...Page,
           id: Type.Optional(Id.properties.id),
@@ -282,7 +268,6 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
     {
       preHandler: reviewer,
       schema: {
-        tags: ['admin'],
         params: Id,
         body: Type.Object({ visible: Type.Boolean() }, { additionalProperties: false }),
       },
@@ -294,7 +279,6 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
     {
       preHandler: administrator,
       schema: {
-        tags: ['admin'],
         querystring: Type.Object({
           ...Page,
           q: Type.Optional(Type.String({ maxLength: 254 })),
@@ -316,7 +300,6 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
     {
       preHandler: administrator,
       schema: {
-        tags: ['admin'],
         params: Id,
         body: Type.Object(
           {
@@ -375,7 +358,7 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
   );
   api.get(
     '/admin/audit',
-    { preHandler: administrator, schema: { tags: ['admin'], querystring: Type.Object(Page) } },
+    { preHandler: administrator, schema: { querystring: Type.Object(Page) } },
     async (req) => ({
       items: await db.query('SELECT * FROM audit_log ORDER BY id DESC LIMIT $1 OFFSET $2', [
         req.query.limit ?? 20,
@@ -384,17 +367,14 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
     }),
   );
   const ChatId = Type.Object({ id: Type.String({ pattern: '^-?[0-9]{1,20}$' }) });
-  api.get(
-    '/admin/telegram/chats',
-    { preHandler: administrator, schema: { tags: ['telegram'] } },
-    async () => ({ items: await db.query('SELECT * FROM telegram_chats ORDER BY created_at') }),
-  );
+  api.get('/admin/telegram/chats', { preHandler: administrator }, async () => ({
+    items: await db.query('SELECT * FROM telegram_chats ORDER BY created_at'),
+  }));
   api.put(
     '/admin/telegram/chats/:id',
     {
       preHandler: administrator,
       schema: {
-        tags: ['telegram'],
         params: ChatId,
         body: Type.Object(
           {
@@ -430,17 +410,31 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
             'Link this Telegram account to an administrator or moderator first',
           );
       }
+      const membership =
+        req.body.kind === 'group' && req.body.enabled
+          ? await requireBotMembership(sender, req.params.id)
+          : undefined;
       return db.transaction(async (tx) => {
+        await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,7))', [req.params.id]);
         await tx.query(
-          'INSERT INTO telegram_chats(id,title,kind,topic_id,enabled) VALUES ($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET title=excluded.title,kind=excluded.kind,topic_id=excluded.topic_id,enabled=excluded.enabled',
+          `INSERT INTO telegram_chats(id,title,kind,topic_id,enabled,approval_status,bot_member_status,reviewed_by,reviewed_at)
+           VALUES ($1,$2,$3,$4,$5,CASE WHEN $5 THEN 'approved' ELSE 'pending' END,coalesce($6,'unknown'),$7,now())
+           ON CONFLICT(id) DO UPDATE SET title=excluded.title,kind=excluded.kind,topic_id=excluded.topic_id,enabled=excluded.enabled,
+           approval_status=CASE WHEN $5 THEN 'approved' ELSE telegram_chats.approval_status END,
+           bot_member_status=coalesce($6,telegram_chats.bot_member_status),bot_can_send=CASE WHEN $5 THEN true ELSE telegram_chats.bot_can_send END,
+           reviewed_by=$7,reviewed_at=now(),updated_at=now()`,
           [
             req.params.id,
             chat.title ?? chat.first_name ?? req.params.id,
             req.body.kind,
             req.body.topicId ?? null,
             req.body.enabled,
+            membership?.status ?? null,
+            req.user!.id,
           ],
         );
+        if (req.body.kind === 'group' && !req.body.enabled)
+          await cancelGroupNotifications(tx, req.params.id);
         await audit(tx, req.user!.id, 'telegram.bind', req.params.id, req.body);
         return { ok: true };
       });
@@ -448,10 +442,16 @@ export function adminRoutes(app: FastifyInstance, db: DB, config: Config, sender
   );
   api.delete(
     '/admin/telegram/chats/:id',
-    { preHandler: administrator, schema: { tags: ['telegram'], params: ChatId } },
+    { preHandler: administrator, schema: { params: ChatId } },
     async (req) =>
       db.transaction(async (tx) => {
-        await tx.query('DELETE FROM telegram_chats WHERE id=$1', [req.params.id]);
+        await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,7))', [req.params.id]);
+        await tx.query("DELETE FROM telegram_chats WHERE id=$1 AND kind='admin'", [req.params.id]);
+        await tx.query(
+          "UPDATE telegram_chats SET enabled=false,updated_at=now() WHERE id=$1 AND kind='group'",
+          [req.params.id],
+        );
+        await cancelGroupNotifications(tx, req.params.id);
         await audit(tx, req.user!.id, 'telegram.unbind', req.params.id);
         return { ok: true };
       }),

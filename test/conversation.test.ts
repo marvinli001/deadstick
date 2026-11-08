@@ -294,7 +294,7 @@ describe.skipIf(!connection)('private Bot conversations with PostgreSQL', () => 
   });
   it('does not listen to group chatter and rejects private conversation callbacks in groups', async () => {
     await storage.db.query(
-      "INSERT INTO telegram_chats(id,title,kind) VALUES ('-100123','Allowed','group')",
+      "INSERT INTO telegram_chats(id,title,kind,approval_status) VALUES ('-100123','Allowed','group','approved')",
     );
     await text('测试云', 42, { chat: { id: -100123, type: 'supergroup', title: 'Allowed' } });
     expect(calls).toHaveLength(0);

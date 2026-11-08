@@ -19,6 +19,7 @@ afterEach(() => {
 describe('Telegram Mini App navigation', () => {
   it('maps only known destinations and provider IDs to internal routes', () => {
     expect(miniAppPath('admin')).toBe('/console');
+    expect(miniAppPath('groups')).toBe('/console/groups');
     expect(miniAppPath('review_submissions')).toBe('/console/submissions');
     expect(miniAppPath(`search_${Buffer.from('测试 /console').toString('base64url')}`)).toBe(
       `/airports?q=${encodeURIComponent('测试 /console')}`,

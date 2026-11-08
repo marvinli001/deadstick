@@ -49,6 +49,7 @@ export function miniAppPath(payload: string | null): string | undefined {
     review_submissions: '/console/submissions',
     memorials: '/console/memorials',
     telegram: '/console/telegram',
+    groups: '/console/groups',
     users: '/console/users',
     jobs: '/console/jobs',
     notifications: '/console/notifications',

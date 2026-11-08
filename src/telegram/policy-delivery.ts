@@ -33,7 +33,6 @@ interface EventRow {
   created_at: Date;
   attempts: number;
 }
-const playful = '机场有新剧情，结论看上面。';
 export function eventTitle(event: NotificationEvent) {
   return event.type === 'recovery' && event.manual
     ? '人工核验：服务恢复'
@@ -89,13 +88,15 @@ export async function dispatchPolicyNotifications(db: DB, sender: TelegramSender
         if (recipient.audience === 'group') {
           const [chat] = await tx.query<{
             enabled: boolean;
+            approval_status: string;
+            bot_can_send: boolean;
             topic_id: number | null;
             notification_policy: Partial<NotificationPolicy>;
             manager_telegram_id: string | null;
           }>("SELECT * FROM telegram_chats WHERE id=$1 AND kind='group' FOR UPDATE", [
             recipient.chat_id,
           ]);
-          if (!chat?.enabled)
+          if (!chat?.enabled || chat.approval_status !== 'approved' || !chat.bot_can_send)
             return cancel(
               rows.map((r) => r.id),
               'RECIPIENT_REVOKED',
@@ -218,14 +219,6 @@ export async function dispatchPolicyNotifications(db: DB, sender: TelegramSender
           }
           if (links.size)
             payload.reply_markup = { inline_keyboard: [...links.values()].map((link) => [link]) };
-        }
-        if (policy.tone === 'playful' && !first.event_meta.test) {
-          if (typeof payload.text === 'string') payload.text += `\n\n${playful}`;
-          if (payload.rich_message)
-            payload.rich_message = {
-              ...(payload.rich_message as object),
-              html: `${(payload.rich_message as { html: string }).html}<p>${playful}</p>`,
-            };
         }
         const incident = first.event_meta.incidentId;
         if (batch.length === 1 && incident && first.event_meta.type !== 'anomaly') {

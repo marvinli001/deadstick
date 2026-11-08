@@ -77,7 +77,6 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     '/providers',
     {
       schema: {
-        tags: ['catalog'],
         querystring: Type.Object({
           ...Page,
           q: Type.Optional(Type.String({ maxLength: 4096 })),
@@ -105,24 +104,19 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
       return { items, total, limit, offset };
     },
   );
-  api.get(
-    '/graveyard',
-    { schema: { tags: ['cemetery'], querystring: Type.Object(Page) } },
-    async (req) => {
-      const { limit = 20, offset = 0 } = req.query;
-      const [items, total] = await Promise.all([
-        db.query(
-          `SELECT ${providerColumns},(SELECT count(*)::int FROM tributes t WHERE t.provider_id=p.id) AS tribute_count FROM providers p WHERE lifecycle='dead' ORDER BY death_at DESC,p.id LIMIT $1 OFFSET $2`,
-          [limit, offset],
-        ),
-        count("FROM providers WHERE lifecycle='dead'", []),
-      ]);
-      return { items, total, limit, offset };
-    },
-  );
+  api.get('/graveyard', { schema: { querystring: Type.Object(Page) } }, async (req) => {
+    const { limit = 20, offset = 0 } = req.query;
+    const [items, total] = await Promise.all([
+      db.query(
+        `SELECT ${providerColumns},(SELECT count(*)::int FROM tributes t WHERE t.provider_id=p.id) AS tribute_count FROM providers p WHERE lifecycle='dead' ORDER BY death_at DESC,p.id LIMIT $1 OFFSET $2`,
+        [limit, offset],
+      ),
+      count("FROM providers WHERE lifecycle='dead'", []),
+    ]);
+    return { items, total, limit, offset };
+  });
   api.get(
     '/stats',
-    { schema: { tags: ['catalog'] } },
     async () =>
       (
         await db.query(
@@ -130,14 +124,13 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
         )
       )[0],
   );
-  api.get('/providers/:id', { schema: { tags: ['catalog'], params: Id } }, (req) =>
+  api.get('/providers/:id', { schema: { params: Id } }, (req) =>
     providerDetail('id', req.params.id, req.user?.id),
   );
   api.get(
     '/providers/slug/:slug',
     {
       schema: {
-        tags: ['catalog'],
         params: Type.Object({ slug: ProviderInput.properties.slug }),
       },
     },
@@ -145,7 +138,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
   );
   api.get(
     '/providers/:id/checks',
-    { schema: { tags: ['catalog'], params: Id, querystring: Type.Object(Page) } },
+    { schema: { params: Id, querystring: Type.Object(Page) } },
     async (req) => ({
       items: await db.query(
         'SELECT id,health,summary,created_at FROM check_runs WHERE provider_id=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3',
@@ -158,7 +151,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     {
       preHandler: authenticated,
       config: { rateLimit: { max: 5, timeWindow: '1 hour' } },
-      schema: { tags: ['submissions'], body: protectedSubmission },
+      schema: { body: protectedSubmission },
     },
     async (req, reply) => {
       await verifyTurnstile(db, config, req.body.turnstileToken, 'submission', req.ip);
@@ -176,7 +169,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     '/submissions/mine',
     {
       preHandler: authenticated,
-      schema: { tags: ['submissions'], querystring: Type.Object(Page) },
+      schema: { querystring: Type.Object(Page) },
     },
     async (req) => ({
       items: await db.query(
@@ -190,7 +183,6 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     {
       config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
       schema: {
-        tags: ['submissions'],
         body: Type.Object(
           {
             name: Type.String({ maxLength: 120 }),
@@ -212,7 +204,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     '/submissions/:id',
     {
       preHandler: authenticated,
-      schema: { tags: ['submissions'], params: Id },
+      schema: { params: Id },
     },
     async (req) =>
       required(
@@ -230,7 +222,6 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
       preHandler: authenticated,
       config: { rateLimit: { max: 10, timeWindow: '1 hour' } },
       schema: {
-        tags: ['submissions'],
         params: Id,
         body: Type.Union([protectedSubmission, protectedLead]),
       },
@@ -251,7 +242,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     {
       preHandler: authenticated,
       config: { rateLimit: { max: 10, timeWindow: '1 hour' } },
-      schema: { tags: ['submissions'], params: Id, body: protectedLead },
+      schema: { params: Id, body: protectedLead },
     },
     async (req, reply) => {
       await verifyTurnstile(db, config, req.body.turnstileToken, 'lead', req.ip);
@@ -262,7 +253,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
   );
   api.post(
     '/admin/providers',
-    { preHandler: reviewer, schema: { tags: ['admin'], body: ProviderInput } },
+    { preHandler: reviewer, schema: { body: ProviderInput } },
     async (req, reply) => {
       const prepared = prepareProvider(req.body, config);
       const result = await db.transaction((tx) => createProvider(tx, prepared, req.user!.id));
@@ -275,7 +266,6 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     {
       preHandler: reviewer,
       schema: {
-        tags: ['admin'],
         querystring: Type.Object({
           ...Page,
           q: Type.Optional(Type.String({ maxLength: 4096 })),
@@ -304,7 +294,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
   );
   api.put(
     '/admin/providers/:id',
-    { preHandler: reviewer, schema: { tags: ['admin'], params: Id, body: ProviderInput } },
+    { preHandler: reviewer, schema: { params: Id, body: ProviderInput } },
     async (req) => {
       const p = prepareProvider(req.body, config);
       return db.transaction(async (tx) => {
@@ -324,7 +314,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
   );
   api.get(
     '/admin/providers/:id/endpoints',
-    { preHandler: reviewer, schema: { tags: ['admin'], params: Id } },
+    { preHandler: reviewer, schema: { params: Id } },
     async (req) => ({
       items: await db.query(
         'SELECT id,kind,label,display_host,public_url,created_at FROM endpoints WHERE provider_id=$1',
@@ -332,25 +322,21 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
       ),
     }),
   );
-  api.get(
-    '/admin/providers/:id',
-    { preHandler: reviewer, schema: { tags: ['admin'], params: Id } },
-    async (req) =>
-      required(
-        (
-          await db.query(
-            `SELECT ${providerColumns},p.enabled,p.failure_streak,p.next_check_at,p.updated_at FROM providers p WHERE id=$1`,
-            [req.params.id],
-          )
-        )[0],
-      ),
+  api.get('/admin/providers/:id', { preHandler: reviewer, schema: { params: Id } }, async (req) =>
+    required(
+      (
+        await db.query(
+          `SELECT ${providerColumns},p.enabled,p.failure_streak,p.next_check_at,p.updated_at FROM providers p WHERE id=$1`,
+          [req.params.id],
+        )
+      )[0],
+    ),
   );
   api.patch(
     '/admin/providers/:id/monitoring',
     {
       preHandler: reviewer,
       schema: {
-        tags: ['admin'],
         params: Id,
         body: Type.Object({ enabled: Type.Boolean() }, { additionalProperties: false }),
       },
@@ -374,7 +360,6 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     {
       preHandler: reviewer,
       schema: {
-        tags: ['admin'],
         querystring: Type.Object({
           ...Page,
           id: Type.Optional(Id.properties.id),
@@ -406,7 +391,6 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     {
       preHandler: reviewer,
       schema: {
-        tags: ['admin'],
         params: Id,
         body: SubmissionReview,
       },
@@ -415,7 +399,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
   );
   api.put(
     '/providers/:id/follow',
-    { preHandler: authenticated, schema: { tags: ['catalog'], params: Id } },
+    { preHandler: authenticated, schema: { params: Id } },
     async (req) => {
       await setFollow(db, req.user!.id, req.params.id, true);
       return { ok: true };
@@ -423,7 +407,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
   );
   api.delete(
     '/providers/:id/follow',
-    { preHandler: authenticated, schema: { tags: ['catalog'], params: Id } },
+    { preHandler: authenticated, schema: { params: Id } },
     async (req) => {
       await setFollow(db, req.user!.id, req.params.id, false);
       return { ok: true };
@@ -431,7 +415,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
   );
   api.get(
     '/follows',
-    { preHandler: authenticated, schema: { tags: ['catalog'], querystring: Type.Object(Page) } },
+    { preHandler: authenticated, schema: { querystring: Type.Object(Page) } },
     async (req) => ({
       items: await db.query(
         `SELECT ${providerColumns} FROM providers p JOIN follows f ON p.id=f.provider_id WHERE f.user_id=$1 ORDER BY f.created_at DESC LIMIT $2 OFFSET $3`,
@@ -444,7 +428,6 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
     {
       preHandler: authenticated,
       schema: {
-        tags: ['cemetery'],
         params: Id,
         body: Type.Object(
           {
@@ -466,7 +449,6 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
       preHandler: authenticated,
       config: { rateLimit: { max: 10, timeWindow: '1 hour' } },
       schema: {
-        tags: ['cemetery'],
         params: Id,
         body: Type.Object(
           { body: Type.String({ minLength: 1, maxLength: 1000 }), turnstileToken: TurnstileToken },
@@ -483,7 +465,7 @@ export function catalogRoutes(app: FastifyInstance, db: DB, config: Config) {
   );
   api.get(
     '/providers/:id/memorials',
-    { schema: { tags: ['cemetery'], params: Id, querystring: Type.Object(Page) } },
+    { schema: { params: Id, querystring: Type.Object(Page) } },
     async (req) => ({
       items: await db.query(
         "SELECT m.id,m.body,m.created_at,u.display_name FROM memorials m JOIN users u ON m.user_id=u.id WHERE provider_id=$1 AND status='visible' ORDER BY created_at DESC LIMIT $2 OFFSET $3",

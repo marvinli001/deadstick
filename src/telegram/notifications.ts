@@ -75,7 +75,7 @@ async function broadcast(
   review?: { subject: string; reply_markup: InlineKeyboardMarkup },
 ) {
   const chats = await db.query<{ id: string; topic_id: number | null; kind: string }>(
-    "SELECT c.id,c.topic_id,c.kind FROM telegram_chats c WHERE c.enabled AND (c.kind='group' OR EXISTS(SELECT 1 FROM users u WHERE u.telegram_id=c.id AND u.role IN ('admin','moderator') AND NOT u.disabled))",
+    "SELECT c.id,c.topic_id,c.kind FROM telegram_chats c WHERE c.enabled AND (c.kind='group' AND c.approval_status='approved' AND c.bot_can_send OR c.kind='admin' AND EXISTS(SELECT 1 FROM users u WHERE u.telegram_id=c.id AND u.role IN ('admin','moderator') AND NOT u.disabled))",
   );
   const followers = await db.query<{ id: string; topic_id: null; kind: string }>(
     "SELECT u.telegram_id AS id,NULL AS topic_id,'follower' AS kind FROM follows f JOIN users u ON u.id=f.user_id WHERE f.provider_id=$1 AND u.telegram_id IS NOT NULL AND NOT u.disabled",
@@ -428,7 +428,7 @@ export async function dispatchNotifications(db: DB, sender: TelegramSender, limi
     try {
       if (n.audience !== 'public') {
         const [recipient] = await db.query<{ allowed: boolean }>(
-          `SELECT CASE WHEN $2='group' THEN EXISTS(SELECT 1 FROM telegram_chats WHERE id=$1 AND kind='group' AND enabled)
+          `SELECT CASE WHEN $2='group' THEN EXISTS(SELECT 1 FROM telegram_chats WHERE id=$1 AND kind='group' AND enabled AND approval_status='approved' AND bot_can_send AND notification_policy->>'enabled'='true')
            ELSE EXISTS(SELECT 1 FROM users u WHERE u.telegram_id=$1 AND NOT u.disabled AND
              ($2='follower' OR u.role=ANY(CASE WHEN $2='admin' THEN ARRAY['admin'] ELSE ARRAY['admin','moderator'] END)
               AND EXISTS(SELECT 1 FROM telegram_chats c WHERE c.id=$1 AND c.kind='admin' AND c.enabled))) END AS allowed`,

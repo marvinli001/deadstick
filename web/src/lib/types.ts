@@ -269,6 +269,23 @@ export interface TelegramChat {
   created_at: string;
 }
 
+export interface TelegramGroup extends TelegramChat {
+  approval_status: 'pending' | 'approved' | 'rejected';
+  bot_member_status: string;
+  bot_can_send: boolean;
+  query_enabled: boolean;
+  guest_enabled: boolean;
+  notification_policy: { enabled?: boolean };
+  username: string | null;
+  inviter_telegram_id: string | null;
+  inviter_name: string | null;
+  joined_at: string | null;
+  left_at: string | null;
+  reviewed_at: string | null;
+  admin_note: string;
+  updated_at: string;
+}
+
 export interface BotUpdate {
   update_id: string;
   status: 'pending' | 'running' | 'done' | 'failed';

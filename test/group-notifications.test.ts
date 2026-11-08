@@ -7,7 +7,7 @@ import { database } from '../src/db.js';
 import { migrate } from '../src/migrate.js';
 import { loadConfig } from '../src/config.js';
 import { buildApp } from '../src/app.js';
-import { digest } from '../src/crypto.js';
+import { digest, encrypt } from '../src/crypto.js';
 import { createBot } from '../src/telegram/bot.js';
 import {
   dispatchNotifications,
@@ -63,6 +63,58 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('group notification business beh
       headers,
       payload: { queryEnabled: true, topicId: 12, policy: value },
     });
+  const adminGroup = '/admin/telegram/groups/-100123';
+  const updateGroup = (body: object) =>
+    app.inject({ method: 'PUT', url: adminGroup, headers: admin, payload: body });
+  const reviewGroup = (approve: boolean) =>
+    app.inject({
+      method: 'POST',
+      url: `${adminGroup}/review`,
+      headers: admin,
+      payload: { approve },
+    });
+  const groupChat = { id: -100123, type: 'supergroup', title: '测试群', username: 'test_group' };
+  const inviter = { id: 42, is_bot: false, first_name: 'Inviter' };
+  const botUser = { id: 123, is_bot: true, first_name: 'Bot' };
+  const membershipUpdate = (update_id: number, oldStatus: string, status: string) => ({
+    update_id,
+    my_chat_member: {
+      chat: groupChat,
+      from: inviter,
+      date: 1,
+      old_chat_member: { status: oldStatus, user: botUser },
+      new_chat_member: { status, user: botUser },
+    },
+  });
+  async function groupBot() {
+    const bot = createBot(storage.db, config);
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    bot.api.config.use(async (_prev, method, params) => {
+      calls.push({ method, params: params as Record<string, unknown> });
+      const result =
+        method === 'getMe'
+          ? { ...botUser, username: 'deadstick_test_bot' }
+          : await defaultSend(method, {
+              ...params,
+              ...('chat_id' in params ? { chat_id: String(params.chat_id) } : {}),
+            } as Record<string, unknown>);
+      return { ok: true, result } as never;
+    });
+    await bot.init();
+    const command = async (update_id: number, text: string) =>
+      bot.handleUpdate({
+        update_id,
+        message: {
+          message_id: update_id,
+          date: 1,
+          chat: groupChat,
+          from: inviter,
+          text,
+          entities: [{ type: 'bot_command', offset: 0, length: text.split(' ')[0]!.length }],
+        },
+      } as never);
+    return { bot, calls, command };
+  }
   async function event(key: string, value: NotificationEvent = { type: 'anomaly' }) {
     await enqueue(
       storage.db,
@@ -116,6 +168,273 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('group notification business beh
     memberStatus = 'administrator';
     botStatus = 'member';
     sender.send.mockReset().mockImplementation(defaultSend);
+    await storage.db.query(
+      "INSERT INTO telegram_chats(id,title,kind,approval_status) VALUES ('-100123','本群','group','approved')",
+    );
+  });
+  it('imports the latest saved membership records without changing existing approval or suspension decisions', async () => {
+    await updateGroup({ enabled: false, note: '保留停用' });
+    const events = [
+      membershipUpdate(1, 'left', 'member'),
+      membershipUpdate(2, 'member', 'left'),
+      membershipUpdate(3, 'left', 'member'),
+    ];
+    for (const event of events) {
+      if (event.update_id < 3) event.my_chat_member.chat = { ...groupChat, id: -100999 };
+      await storage.db.query(
+        'INSERT INTO bot_updates(update_id,payload_ciphertext) VALUES ($1,$2)',
+        [event.update_id, encrypt(JSON.stringify(event), config.appKey)],
+      );
+    }
+    const imported = await app.inject({
+      url: '/admin/telegram/groups/discover',
+      method: 'POST',
+      headers: admin,
+      payload: {},
+    });
+    expect(imported.json()).toEqual({ imported: 1 });
+    expect(
+      (
+        await storage.db.query(
+          "SELECT enabled,approval_status,bot_member_status FROM telegram_chats WHERE id='-100999'",
+        )
+      )[0],
+    ).toEqual({ enabled: false, approval_status: 'pending', bot_member_status: 'left' });
+    expect(
+      (
+        await storage.db.query(
+          "SELECT enabled,approval_status,admin_note FROM telegram_chats WHERE id='-100123'",
+        )
+      )[0],
+    ).toEqual({ enabled: false, approval_status: 'approved', admin_note: '保留停用' });
+  });
+  it('records every invited group as pending and requires site approval before commands or notifications run', async () => {
+    await storage.db.query('DELETE FROM telegram_chats');
+    const { bot, calls, command } = await groupBot();
+    await bot.handleUpdate(membershipUpdate(1, 'left', 'member') as never);
+    expect(
+      (
+        await storage.db.query(
+          'SELECT approval_status,enabled,bot_member_status,inviter_telegram_id,username FROM telegram_chats',
+        )
+      )[0],
+    ).toEqual({
+      approval_status: 'pending',
+      enabled: false,
+      bot_member_status: 'member',
+      inviter_telegram_id: '42',
+      username: 'test_group',
+    });
+    await command(2, '/status airport-one');
+    expect(calls.filter((c) => c.method.startsWith('send'))).toHaveLength(0);
+    await command(3, '/bind');
+    expect(calls.at(-1)!.params.text).toContain('等待站点管理员审批');
+    expect((await save()).json()).toMatchObject({ active: false, approval_status: 'pending' });
+    expect((await updateGroup({ enabled: true })).json().error.code).toBe(
+      'GROUP_APPROVAL_REQUIRED',
+    );
+    expect((await reviewGroup(true)).statusCode).toBe(200);
+    await command(4, '/status airport-one');
+    expect(calls.at(-1)!.method).toBe('sendRichMessage');
+    expect((await app.inject({ url: adminGroup, headers: admin })).json()).toMatchObject({
+      active: true,
+      approval_status: 'approved',
+    });
+    expect(
+      await storage.db.query("SELECT action FROM audit_log WHERE action='telegram.group.approve'"),
+    ).toHaveLength(1);
+  });
+  it('keeps administrator shutdown effective after group settings saves and bind commands, including queued tests', async () => {
+    await save();
+    await event('before-disabled');
+    await enqueue(storage.db, 'legacy-disabled', '-100123', { text: '旧通知' }, null, {
+      audience: 'group',
+    });
+    expect((await updateGroup({ enabled: false })).statusCode).toBe(200);
+    expect((await save()).json().active).toBe(false);
+    const { command } = await groupBot();
+    await command(1, '/bind');
+    expect((await storage.db.query('SELECT enabled FROM telegram_chats'))[0]!.enabled).toBe(false);
+    expect(
+      (await app.inject({ url: `${group}/test`, method: 'POST', headers: member, payload: {} }))
+        .statusCode,
+    ).toBe(409);
+    await event('after-disabled');
+    await dispatchNotifications(storage.db, sender);
+    expect(sent()).toHaveLength(0);
+    expect(
+      await storage.db.query("SELECT id FROM notifications WHERE status<>'failed'"),
+    ).toHaveLength(0);
+    expect((await updateGroup({ enabled: true })).statusCode).toBe(200);
+    expect((await save()).json().active).toBe(true);
+  });
+  it('enforces command, Guest and notification switches independently', async () => {
+    const { bot, calls, command } = await groupBot();
+    const guest = async (update_id: number) =>
+      bot.handleUpdate({
+        update_id,
+        guest_message: {
+          message_id: update_id,
+          date: 1,
+          chat: groupChat,
+          from: inviter,
+          guest_query_id: `guest-${update_id}`,
+          text: '@deadstick_test_bot airport-one',
+        },
+      } as never);
+    expect(
+      (
+        await updateGroup({
+          queryEnabled: false,
+          guestEnabled: true,
+          policy: policy({ enabled: false }),
+          note: '业务群',
+        })
+      ).statusCode,
+    ).toBe(200);
+    await command(1, '/status airport-one');
+    expect(calls.filter((c) => c.method.startsWith('send'))).toHaveLength(0);
+    await guest(2);
+    expect(calls.filter((c) => c.method === 'answerGuestQuery')).toHaveLength(1);
+    await event('notification-off');
+    await dispatchNotifications(storage.db, sender);
+    expect(sent()).toHaveLength(0);
+    expect((await updateGroup({ queryEnabled: true, guestEnabled: false })).statusCode).toBe(200);
+    await command(3, '/status airport-one');
+    expect(calls.filter((c) => c.method === 'sendRichMessage')).toHaveLength(1);
+    await guest(4);
+    expect(calls.filter((c) => c.method === 'answerGuestQuery')).toHaveLength(1);
+    expect((await updateGroup({ policy: policy() })).statusCode).toBe(200);
+    await event('notification-on');
+    await dispatchNotifications(storage.db, sender);
+    expect(sent()).toHaveLength(1);
+    expect((await app.inject({ url: adminGroup, headers: admin })).json().admin_note).toBe(
+      '业务群',
+    );
+  });
+  it('uses site administrator authorization when they take over a former group managers notification policy', async () => {
+    await save();
+    memberStatus = 'member';
+    expect((await updateGroup({ policy: policy() })).statusCode).toBe(200);
+    expect(
+      (await storage.db.query('SELECT manager_telegram_id FROM telegram_chats'))[0]!
+        .manager_telegram_id,
+    ).toBeNull();
+    await event('site-admin-policy');
+    await dispatchNotifications(storage.db, sender);
+    expect(sent()).toHaveLength(1);
+  });
+  it('rejects and leaves groups, retains rejection on re-invitation and disables delivery even if leaving fails', async () => {
+    await save();
+    await event('before-reject');
+    sender.send.mockImplementation(async (method, params) => {
+      if (method === 'leaveChat') throw new TelegramError(500);
+      return defaultSend(method, params);
+    });
+    expect((await reviewGroup(false)).json().error.code).toBe('GROUP_LEAVE_FAILED');
+    expect(
+      (await storage.db.query('SELECT enabled,approval_status FROM telegram_chats'))[0],
+    ).toEqual({ enabled: false, approval_status: 'rejected' });
+    await dispatchNotifications(storage.db, sender);
+    expect(sent()).toHaveLength(0);
+    expect((await save()).json()).toMatchObject({ active: false, approval_status: 'rejected' });
+    sender.send.mockImplementation(defaultSend);
+    expect((await reviewGroup(false)).statusCode).toBe(200);
+    expect(sender.send).toHaveBeenCalledWith('leaveChat', { chat_id: '-100123' });
+    const { bot, calls } = await groupBot();
+    await bot.handleUpdate(membershipUpdate(1, 'left', 'member') as never);
+    expect(calls.some((c) => c.method === 'leaveChat')).toBe(true);
+    expect(
+      (
+        await storage.db.query(
+          'SELECT enabled,approval_status,bot_member_status FROM telegram_chats',
+        )
+      )[0],
+    ).toEqual({ enabled: false, approval_status: 'rejected', bot_member_status: 'left' });
+  });
+  it('lets site admins reopen a rejected group before re-invitation without activating it before a fresh approval', async () => {
+    expect((await reviewGroup(false)).statusCode).toBe(200);
+    botStatus = 'left';
+    expect((await reviewGroup(true)).statusCode).toBe(409);
+    const reopen = () =>
+      app.inject({ url: `${adminGroup}/reopen`, method: 'POST', headers: admin, payload: {} });
+    expect((await reopen()).statusCode).toBe(200);
+    expect(
+      (await storage.db.query('SELECT approval_status,enabled FROM telegram_chats'))[0],
+    ).toEqual({ approval_status: 'pending', enabled: false });
+    expect((await reopen()).statusCode).toBe(409);
+    const { bot, calls } = await groupBot();
+    await bot.handleUpdate(membershipUpdate(1, 'left', 'member') as never);
+    expect(calls.some((c) => c.method === 'leaveChat')).toBe(false);
+    expect((await storage.db.query('SELECT enabled FROM telegram_chats'))[0]!.enabled).toBe(false);
+    botStatus = 'member';
+    expect((await reviewGroup(true)).statusCode).toBe(200);
+    expect(
+      (await storage.db.query('SELECT approval_status,enabled FROM telegram_chats'))[0],
+    ).toEqual({ approval_status: 'approved', enabled: true });
+  });
+  it('tracks removal of inactive groups, requires approval on rejoin and preserves manual suspension on role updates', async () => {
+    await updateGroup({ enabled: false });
+    const { bot } = await groupBot();
+    await bot.handleUpdate(membershipUpdate(1, 'member', 'administrator') as never);
+    expect(
+      (await storage.db.query('SELECT enabled,bot_member_status FROM telegram_chats'))[0],
+    ).toEqual({ enabled: false, bot_member_status: 'administrator' });
+    await bot.handleUpdate(membershipUpdate(2, 'administrator', 'kicked') as never);
+    expect(
+      (await storage.db.query('SELECT bot_member_status,left_at FROM telegram_chats'))[0],
+    ).toMatchObject({ bot_member_status: 'kicked', left_at: expect.any(Date) });
+    await bot.handleUpdate(membershipUpdate(3, 'kicked', 'member') as never);
+    expect(
+      (await storage.db.query('SELECT enabled,approval_status,left_at FROM telegram_chats'))[0],
+    ).toEqual({ enabled: false, approval_status: 'pending', left_at: null });
+    botStatus = 'left';
+    expect((await reviewGroup(true)).statusCode).toBe(409);
+    expect(
+      (
+        await app.inject({ url: `${adminGroup}/sync`, method: 'POST', headers: admin, payload: {} })
+      ).json(),
+    ).toMatchObject({ enabled: false, bot_member_status: 'left' });
+    const filtered = await app.inject({
+      url: '/admin/telegram/groups?status=left&q=100123',
+      headers: admin,
+    });
+    expect(filtered.json().items).toHaveLength(0);
+    expect(
+      (
+        await app.inject({ url: '/admin/telegram/groups?status=left&q=-100123', headers: admin })
+      ).json().items,
+    ).toHaveLength(1);
+  });
+  it('restricts group administration to site admins and validates partial updates', async () => {
+    const [moderator] = await storage.db.query<{ id: string }>(
+      "INSERT INTO users(display_name,role) VALUES ('Mod','moderator') RETURNING id",
+    );
+    await storage.db.query(
+      "INSERT INTO sessions(token_hash,user_id,csrf_token,expires_at) VALUES ($1,$2,'csrf',now()+interval '1 day')",
+      [digest('group-mod'), moderator!.id],
+    );
+    const routes = [
+      ['GET', '/admin/telegram/groups', undefined],
+      ['GET', adminGroup, undefined],
+      ['PUT', adminGroup, { queryEnabled: false }],
+      ['POST', `${adminGroup}/review`, { approve: true }],
+      ['POST', `${adminGroup}/sync`, {}],
+      ['POST', `${adminGroup}/reopen`, {}],
+    ] as const;
+    for (const [method, url, payload] of routes) {
+      expect((await app.inject({ method, url, payload })).statusCode).toBe(401);
+      for (const headers of [member, { authorization: 'Bearer group-mod' }])
+        expect((await app.inject({ method, url, payload, headers })).statusCode).toBe(403);
+    }
+    for (const body of [{ topicId: 0 }, { note: 'x'.repeat(1001) }, {}])
+      expect((await updateGroup(body)).statusCode, JSON.stringify(body)).toBe(400);
+    expect((await updateGroup({ approval_status: 'rejected', enabled: false })).statusCode).toBe(
+      400,
+    );
+    expect(
+      (await storage.db.query('SELECT approval_status FROM telegram_chats'))[0]!.approval_status,
+    ).toBe('approved');
   });
   it('lets current ordinary group admins manage only their own group and checks permissions again on every read/write/test', async () => {
     expect((await app.inject({ url: group, headers: member })).statusCode).toBe(200);
@@ -170,6 +489,31 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('group notification business beh
       await tx.query('DROP SCHEMA legacy_group_policy CASCADE');
     });
   });
+  it('keeps legacy enabled and disabled group bindings approved while new discoveries default to pending', async () => {
+    await storage.db.transaction(async (tx) => {
+      await tx.query('CREATE SCHEMA legacy_group_approval');
+      await tx.query('SET LOCAL search_path TO legacy_group_approval');
+      await tx.query('CREATE TABLE users(id uuid PRIMARY KEY)');
+      await tx.query(
+        'CREATE TABLE telegram_chats(id text PRIMARY KEY,kind text,enabled boolean,created_at timestamptz DEFAULT now())',
+      );
+      await tx.query(
+        "INSERT INTO telegram_chats(id,kind,enabled) VALUES ('-1','group',true),('-2','group',false)",
+      );
+      await tx.query(
+        await readFile(new URL('../migrations/011_group_management.sql', import.meta.url), 'utf8'),
+      );
+      await tx.query("INSERT INTO telegram_chats(id,kind,enabled) VALUES ('-3','group',false)");
+      expect(
+        await tx.query('SELECT id,enabled,approval_status FROM telegram_chats ORDER BY id'),
+      ).toEqual([
+        { id: '-1', enabled: true, approval_status: 'approved' },
+        { id: '-2', enabled: false, approval_status: 'approved' },
+        { id: '-3', enabled: false, approval_status: 'pending' },
+      ]);
+      await tx.query('DROP SCHEMA legacy_group_approval CASCADE');
+    });
+  });
   it('keeps querying independent of notification opt-in and sends only explicit labelled tests while disabled', async () => {
     await save(policy({ enabled: false }));
     await event('disabled');
@@ -212,7 +556,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('group notification business beh
     expect(text).toContain('人工核验：确认跑路');
     expect(text).toContain('&lt;人工结论&gt;');
     expect(text).toContain('机场 &lt;甲&gt;');
-    expect(text).toContain('机场有新剧情');
+    expect(text).not.toContain('机场有新剧情，结论看上面。');
     expect(text).toContain('核验证据 1 项');
     await dispatchNotifications(storage.db, sender);
     expect(sent()).toHaveLength(1);

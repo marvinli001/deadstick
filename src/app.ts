@@ -6,8 +6,6 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
-import swagger from '@fastify/swagger';
-import swaggerUi from '@fastify/swagger-ui';
 import multipart from '@fastify/multipart';
 import type { DB } from './db.js';
 import type { Config } from './config.js';
@@ -20,6 +18,7 @@ import { telegramRoutes } from './telegram/routes.js';
 import { telegramSender, TelegramError, type TelegramSender } from './telegram/notifications.js';
 import { telegramConfig } from './telegram/settings.js';
 import { groupSettingsRoutes } from './telegram/group-settings.js';
+import { adminGroupRoutes } from './telegram/groups.js';
 import { mcpProtocolPaths, OAuthError } from './mcp/access.js';
 import { oauthRoutes } from './mcp/oauth.js';
 import { mcpRoutes } from './mcp/routes.js';
@@ -92,20 +91,6 @@ export async function buildApp(
       parts: 108,
     },
   });
-  await app.register(swagger, {
-    openapi: {
-      info: {
-        title: 'Deadstick API',
-        version: '0.1.0',
-        description:
-          '机场监测、人工复核、赛博墓园与 Telegram 机器人。订阅凭据不会出现在公开接口中。',
-      },
-      components: {
-        securitySchemes: { session: { type: 'apiKey', in: 'cookie', name: 'session' } },
-      },
-    },
-  });
-  await app.register(swaggerUi, { routePrefix: '/docs' });
   app.decorateRequest('user', null);
   app.decorateRequest('sessionHash', null);
   app.decorateRequest('csrfToken', null);
@@ -206,10 +191,10 @@ export async function buildApp(
   adminRoutes(app, db, config, sender);
   telegramRoutes(app, db, config, sender);
   groupSettingsRoutes(app, db, sender);
+  adminGroupRoutes(app, db, sender, config);
   managementRoutes(app, db, config);
   oauthRoutes(app, db, config);
   mcpRoutes(app, db, config);
-  app.get('/openapi.json', { schema: { hide: true } }, async () => app.swagger());
   if (existsSync(join(config.webDist, 'index.html'))) {
     await app.register(fastifyStatic, {
       root: config.webDist,

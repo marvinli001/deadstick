@@ -795,8 +795,8 @@ describe.skipIf(!connection)('catalog search and submission workflows', () => {
         [p.id, deathAt],
       );
       await storage.db.query(
-        `INSERT INTO telegram_chats(id,title,kind,notification_policy)
-        VALUES ('-100123','通报群','group','{"enabled":true}')`,
+        `INSERT INTO telegram_chats(id,title,kind,notification_policy,approval_status)
+        VALUES ('-100123','通报群','group','{"enabled":true}','approved')`,
       );
       const lead = await post(`/providers/${p.id}/submissions`, {
         kind: 'review',

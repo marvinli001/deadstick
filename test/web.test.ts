@@ -84,6 +84,15 @@ describe('web and API on one origin', () => {
     expect(page.headers['content-security-policy']).toContain("frame-ancestors 'none'");
   });
 
+  it('does not expose API documentation when serving the frontend', async () => {
+    for (const url of ['/docs', '/docs/', '/docs/json', '/docs/yaml', '/openapi.json']) {
+      const response = await app.inject({ url });
+      expect(response.statusCode, url).toBe(404);
+      const page = await app.inject({ url, headers: { accept: 'text/html' } });
+      expect(page.body, url).toBe(html);
+    }
+  });
+
   it('preserves API errors and never sends HTML for JSON or mutation requests', async () => {
     const auth = await app.inject({ url: '/auth/me', headers: { accept: 'application/json' } });
     expect(auth.statusCode).toBe(401);

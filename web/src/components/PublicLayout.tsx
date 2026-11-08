@@ -190,7 +190,6 @@ export function PublicLayout() {
       </main>
       <footer className={styles.footer}>
         <span className="mono">DEADSTICK</span>
-        <a href="/docs">API</a>
       </footer>
     </div>
   );

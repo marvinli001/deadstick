@@ -1,6 +1,6 @@
 # Deadstick
 
-机场存活监测、人工复核、Telegram 通报与赛博墓园。用户入口为 **Telegram Bot + Mini App**：Bot 提供查询、通知与快捷操作，投稿、详情与管理操作在 Telegram 内的 Mini App 完成。`web/` 为 Mini App 与管理员后台共用的前端，不再扩展独立用户网站。交互文档位于 `/docs`，OpenAPI 位于 `/openapi.json`。
+机场存活监测、人工复核、Telegram 通报与赛博墓园。用户入口为 **Telegram Bot + Mini App**：Bot 提供查询、通知与快捷操作，投稿、详情与管理操作在 Telegram 内的 Mini App 完成。`web/` 为 Mini App 与管理员后台共用的前端，不再扩展独立用户网站。
 
 ## 已实现
 
@@ -76,7 +76,7 @@ OIDC 登录流程：`GET /auth/telegram/start?next=/console` 获得授权 URL �
 
 ## 前端接入
 
-以 `/docs` 中的输入 schema 和 `/openapi.json` 为准。返回字段采用 snake_case；请求参数采用文档里的 camelCase。
+以服务端路由的输入 schema 为准。返回字段采用 snake_case；请求参数采用文档里的 camelCase。
 
 | 用途                              | 接口                                                                                                                                   |
 | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
@@ -108,7 +108,7 @@ OIDC 登录流程：`GET /auth/telegram/start?next=/console` 获得授权 URL �
 
 `POST /submissions` 的 `slug` 可省略，由服务端生成。`POST /submissions/check` 接收 `{ name, website? }`，只返回公开候选；`GET/PUT /submissions/:id` 仅限本人，只有 `needs_info` 可补交，未重新填写订阅时保留原加密订阅。已有机场线索接收 `{ kind: website|abnormal|evidence|review, body, website?, evidenceUrls? }`，内容仅本人和审核员可见。审核接口支持 `{ action: approved|rejected|needs_info, reason, revision }`，`revision` 必须对应审核员已查看的版本；版本变化返回 `409`，需要重新打开资料。原 `{ approve, reason }` 仍兼容初始版本，补交后须携带当前 `revision`。批准线索关联人工复核，不直接确认跑路。机场资料新增 `aliases`，旧管理员更新请求省略时保留原别名。
 
-群设置接口每次校验当前本群管理员或站内管理员身份；群 ID 和 Mini App 链接不构成授权。策略字段以 `/docs` 为准，查询开关与主动通知开关独立。个人通知偏好仅作用于本人的关注通知，不影响审核待办私信开关。
+群设置接口每次校验当前本群管理员或站内管理员身份；群 ID 和 Mini App 链接不构成授权。策略字段以 `src/telegram/notification-policy.ts` 为准，查询开关与主动通知开关独立。个人通知偏好仅作用于本人的关注通知，不影响审核待办私信开关。
 
 创建机场 / 投稿示例：
 

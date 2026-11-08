@@ -34,22 +34,19 @@ const settingsView = (saved: TurnstileSettings) => ({
 
 export function turnstileRoutes(app: FastifyInstance, db: DB, config: Config) {
   const api = app.withTypeProvider<TypeBoxTypeProvider>();
-  api.get('/settings/turnstile', { schema: { tags: ['catalog'] } }, async (_req, reply) => {
+  api.get('/settings/turnstile', async (_req, reply) => {
     reply.header('Cache-Control', 'no-store');
     const saved = await settings(db, config);
     return { enabled: saved.enabled, siteKey: saved.enabled ? saved.siteKey : '' };
   });
-  api.get(
-    '/admin/settings/turnstile',
-    { preHandler: administrator, schema: { tags: ['admin'] } },
-    async () => settingsView(await settings(db, config)),
+  api.get('/admin/settings/turnstile', { preHandler: administrator }, async () =>
+    settingsView(await settings(db, config)),
   );
   api.put(
     '/admin/settings/turnstile',
     {
       preHandler: administrator,
       schema: {
-        tags: ['admin'],
         body: Type.Object(
           {
             enabled: Type.Boolean(),

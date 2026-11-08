@@ -12,8 +12,15 @@ import {
   presets,
   validatePolicy,
 } from './notification-policy.js';
+import {
+  GroupId,
+  GroupTopicId,
+  canSendInGroup,
+  requireGroupActive,
+  type GroupMember,
+} from './groups.js';
 
-export const GroupId = Type.Object({ id: Type.String({ pattern: '^-[0-9]{1,20}$' }) });
+export { GroupId } from './groups.js';
 export async function requireGroupManager(
   sender: TelegramSender,
   chatId: string,
@@ -42,30 +49,32 @@ export async function isGroupAdministrator(sender: TelegramSender, chatId: strin
 }
 export async function requireBotMembership(sender: TelegramSender, chatId: string) {
   const bot = (await sender.send('getMe', {})) as { id: number };
-  const member = (await sender.send('getChatMember', { chat_id: chatId, user_id: bot.id })) as {
-    status: string;
-    is_member?: boolean;
-    can_send_messages?: boolean;
-  };
-  if (
-    !['creator', 'administrator', 'member'].includes(member.status) &&
-    !(member.status === 'restricted' && member.is_member && member.can_send_messages)
-  )
+  const member = (await sender.send('getChatMember', {
+    chat_id: chatId,
+    user_id: bot.id,
+  })) as GroupMember;
+  if (!canSendInGroup(member))
     throw new AppError(403, 'BOT_NOT_MEMBER', '请先把机器人加入本群并允许发言');
+  return member;
 }
 export async function groupSettings(db: DB, id: string) {
   const [row] = await db.query<{
     title: string;
     enabled: boolean;
     query_enabled: boolean;
+    guest_enabled: boolean;
+    approval_status: 'pending' | 'approved' | 'rejected';
+    bot_can_send: boolean;
     topic_id: number | null;
     notification_policy: Partial<NotificationPolicy>;
   }>("SELECT * FROM telegram_chats WHERE id=$1 AND kind='group'", [id]);
   return {
     chat_id: id,
     title: row?.title ?? id,
-    active: row?.enabled ?? false,
+    active: Boolean(row?.enabled && row.approval_status === 'approved' && row.bot_can_send),
+    approval_status: row?.approval_status ?? 'pending',
     query_enabled: row?.query_enabled ?? false,
+    guest_enabled: row?.guest_enabled ?? true,
     topic_id: row?.topic_id ?? null,
     policy: policyWithDefaults(row?.notification_policy ?? null),
     presets,
@@ -76,7 +85,7 @@ export function groupSettingsRoutes(app: FastifyInstance, db: DB, sender: Telegr
   const access = async (id: string, user: User) => requireGroupManager(sender, id, user);
   api.get(
     '/telegram/groups/:id',
-    { preHandler: authenticated, schema: { tags: ['telegram'], params: GroupId } },
+    { preHandler: authenticated, schema: { params: GroupId } },
     async (req) => {
       const chat = await access(req.params.id, req.user!);
       return { ...(await groupSettings(db, req.params.id)), title: chat.title ?? req.params.id };
@@ -88,12 +97,12 @@ export function groupSettingsRoutes(app: FastifyInstance, db: DB, sender: Telegr
       preHandler: authenticated,
       config: { rateLimit: { max: 15, timeWindow: '1 minute' } },
       schema: {
-        tags: ['telegram'],
         params: GroupId,
         body: Type.Object(
           {
             queryEnabled: Type.Boolean(),
-            topicId: Type.Union([Type.Integer({ minimum: 1, maximum: 2147483647 }), Type.Null()]),
+            guestEnabled: Type.Optional(Type.Boolean()),
+            topicId: GroupTopicId,
             policy: NotificationPolicy,
           },
           { additionalProperties: false },
@@ -106,10 +115,11 @@ export function groupSettingsRoutes(app: FastifyInstance, db: DB, sender: Telegr
       await db.transaction(async (tx) => {
         await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,7))', [req.params.id]);
         await tx.query(
-          `INSERT INTO telegram_chats(id,title,kind,enabled,query_enabled,topic_id,notification_policy,manager_telegram_id)
-        VALUES ($1,$2,'group',true,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET
-        title=excluded.title,enabled=true,query_enabled=excluded.query_enabled,topic_id=excluded.topic_id,
-        notification_policy=excluded.notification_policy,manager_telegram_id=excluded.manager_telegram_id`,
+          `INSERT INTO telegram_chats(id,title,kind,enabled,query_enabled,topic_id,notification_policy,manager_telegram_id,guest_enabled)
+        VALUES ($1,$2,'group',false,$3,$4,$5,$6,coalesce($7,true)) ON CONFLICT(id) DO UPDATE SET
+        title=excluded.title,query_enabled=excluded.query_enabled,topic_id=excluded.topic_id,
+        notification_policy=excluded.notification_policy,manager_telegram_id=excluded.manager_telegram_id,
+        guest_enabled=coalesce($7,telegram_chats.guest_enabled),updated_at=now()`,
           [
             req.params.id,
             (chat.title ?? req.params.id).slice(0, 255),
@@ -117,6 +127,7 @@ export function groupSettingsRoutes(app: FastifyInstance, db: DB, sender: Telegr
             req.body.topicId,
             JSON.stringify(req.body.policy),
             req.user!.role === 'admin' ? null : req.user!.telegram_id,
+            req.body.guestEnabled ?? null,
           ],
         );
         await audit(tx, req.user!.id, 'telegram.group.settings', req.params.id, req.body);
@@ -138,13 +149,13 @@ export function groupSettingsRoutes(app: FastifyInstance, db: DB, sender: Telegr
       preHandler: authenticated,
       config: { rateLimit: { max: 3, timeWindow: '1 minute' } },
       schema: {
-        tags: ['telegram'],
         params: GroupId,
         body: Type.Object({}, { additionalProperties: false }),
       },
     },
     async (req) => {
       await access(req.params.id, req.user!);
+      await requireGroupActive(db, req.params.id);
       const settings = await groupSettings(db, req.params.id);
       if (!settings.active) throw new AppError(409, 'GROUP_INACTIVE', '请先保存群配置');
       // An explicit test is labelled and bypasses quiet hours; delivery still rechecks membership.
@@ -160,22 +171,18 @@ export function groupSettingsRoutes(app: FastifyInstance, db: DB, sender: Telegr
       return { ok: true };
     },
   );
-  api.get(
-    '/telegram/notifications/preferences',
-    { preHandler: authenticated, schema: { tags: ['telegram'] } },
-    async (req) => {
-      const [row] = await db.query<{ policy: NotificationPolicy }>(
-        'SELECT policy FROM notification_preferences WHERE user_id=$1',
-        [req.user!.id],
-      );
-      return { policy: policyWithDefaults(row?.policy ?? null, true), presets };
-    },
-  );
+  api.get('/telegram/notifications/preferences', { preHandler: authenticated }, async (req) => {
+    const [row] = await db.query<{ policy: NotificationPolicy }>(
+      'SELECT policy FROM notification_preferences WHERE user_id=$1',
+      [req.user!.id],
+    );
+    return { policy: policyWithDefaults(row?.policy ?? null, true), presets };
+  });
   api.put(
     '/telegram/notifications/preferences',
     {
       preHandler: authenticated,
-      schema: { tags: ['telegram'], body: NotificationPolicy },
+      schema: { body: NotificationPolicy },
     },
     async (req) => {
       validatePolicy(req.body);

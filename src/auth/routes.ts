@@ -27,7 +27,7 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
   const destination = Type.Object({
     next: Type.Optional(Type.String({ maxLength: 512, pattern: '^/(?!/)[^\\\\\\s]*$' })),
   });
-  api.get('/auth/telegram/config', { schema: { tags: ['auth'] } }, async () => ({
+  api.get('/auth/telegram/config', async () => ({
     bot_username: config.botUsername ?? null,
     oidc_enabled: Boolean(config.telegramClientId && config.telegramClientSecret),
     miniapp_enabled: Boolean(
@@ -40,7 +40,6 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
     {
       config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
       schema: {
-        tags: ['auth'],
         body: Type.Object(
           { ...credentials.properties, displayName: Type.String({ minLength: 1, maxLength: 80 }) },
           { additionalProperties: false },
@@ -61,7 +60,7 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
     '/auth/login',
     {
       config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
-      schema: { tags: ['auth'], body: credentials },
+      schema: { body: credentials },
     },
     async (req, reply) => {
       const [user] = await db.query<User & { password_hash: string | null }>(
@@ -75,27 +74,22 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
       return newSession(db, config, reply, user);
     },
   );
-  api.get(
-    '/auth/me',
-    { preHandler: authenticated, schema: { tags: ['auth'] } },
-    async (req, reply) => {
-      reply.header('Cache-Control', 'no-store');
-      const [row] = await db.query<{ has_password: boolean }>(
-        'SELECT password_hash IS NOT NULL AS has_password FROM users WHERE id=$1',
-        [req.user!.id],
-      );
-      return {
-        user: { ...publicUser(req.user!), has_password: row!.has_password },
-        csrfToken: req.csrfToken,
-      };
-    },
-  );
+  api.get('/auth/me', { preHandler: authenticated }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const [row] = await db.query<{ has_password: boolean }>(
+      'SELECT password_hash IS NOT NULL AS has_password FROM users WHERE id=$1',
+      [req.user!.id],
+    );
+    return {
+      user: { ...publicUser(req.user!), has_password: row!.has_password },
+      csrfToken: req.csrfToken,
+    };
+  });
   api.patch(
     '/auth/me',
     {
       preHandler: authenticated,
       schema: {
-        tags: ['auth'],
         body: Type.Object(
           { displayName: Type.String({ minLength: 1, maxLength: 80, pattern: '\\S' }) },
           { additionalProperties: false },
@@ -110,48 +104,40 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
       return { user: publicUser(user!) };
     },
   );
-  api.delete(
-    '/auth/telegram',
-    { preHandler: authenticated, schema: { tags: ['auth'] } },
-    async (req) =>
-      db.transaction(async (tx) => {
-        const [current] = await tx.query<{ telegram_id: string | null; has_password: boolean }>(
-          'SELECT telegram_id,(email IS NOT NULL AND password_hash IS NOT NULL) AS has_password FROM users WHERE id=$1 FOR UPDATE',
-          [req.user!.id],
+  api.delete('/auth/telegram', { preHandler: authenticated }, async (req) =>
+    db.transaction(async (tx) => {
+      const [current] = await tx.query<{ telegram_id: string | null; has_password: boolean }>(
+        'SELECT telegram_id,(email IS NOT NULL AND password_hash IS NOT NULL) AS has_password FROM users WHERE id=$1 FOR UPDATE',
+        [req.user!.id],
+      );
+      if (!current?.telegram_id)
+        throw new AppError(409, 'NOT_LINKED', 'No Telegram account is linked');
+      if (!current.has_password)
+        throw new AppError(
+          409,
+          'LAST_LOGIN_METHOD',
+          'Set an email and password before unlinking Telegram',
         );
-        if (!current?.telegram_id)
-          throw new AppError(409, 'NOT_LINKED', 'No Telegram account is linked');
-        if (!current.has_password)
-          throw new AppError(
-            409,
-            'LAST_LOGIN_METHOD',
-            'Set an email and password before unlinking Telegram',
-          );
-        await tx.query("DELETE FROM telegram_chats WHERE id=$1 AND kind='admin'", [
-          current.telegram_id,
-        ]);
-        const [user] = await tx.query<User>(
-          `UPDATE users SET telegram_id=NULL,telegram_subject=NULL WHERE id=$1 RETURNING ${userColumns}`,
-          [req.user!.id],
-        );
-        return { user: publicUser(user!) };
-      }),
+      await tx.query("DELETE FROM telegram_chats WHERE id=$1 AND kind='admin'", [
+        current.telegram_id,
+      ]);
+      const [user] = await tx.query<User>(
+        `UPDATE users SET telegram_id=NULL,telegram_subject=NULL WHERE id=$1 RETURNING ${userColumns}`,
+        [req.user!.id],
+      );
+      return { user: publicUser(user!) };
+    }),
   );
-  api.post(
-    '/auth/logout',
-    { preHandler: authenticated, schema: { tags: ['auth'] } },
-    async (req, reply) => {
-      await db.query('DELETE FROM sessions WHERE token_hash=$1', [req.sessionHash]);
-      reply.clearCookie('session', { path: '/' });
-      return { ok: true };
-    },
-  );
+  api.post('/auth/logout', { preHandler: authenticated }, async (req, reply) => {
+    await db.query('DELETE FROM sessions WHERE token_hash=$1', [req.sessionHash]);
+    reply.clearCookie('session', { path: '/' });
+    return { ok: true };
+  });
   api.post(
     '/auth/password',
     {
       preHandler: authenticated,
       schema: {
-        tags: ['auth'],
         body: Type.Object(
           {
             currentPassword: Type.String({ maxLength: 128 }),
@@ -234,21 +220,18 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
     '/auth/telegram/start',
     {
       config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
-      schema: { tags: ['auth'], querystring: destination },
+      schema: { querystring: destination },
     },
     (req, reply) => start('login', req, reply, req.query.next),
   );
-  api.post(
-    '/auth/telegram/link',
-    { preHandler: authenticated, schema: { tags: ['auth'] } },
-    (req, reply) => start('link', req, reply),
+  api.post('/auth/telegram/link', { preHandler: authenticated }, (req, reply) =>
+    start('link', req, reply),
   );
   api.get(
     '/auth/telegram/callback',
     {
       config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
       schema: {
-        tags: ['auth'],
         querystring: Type.Object({
           state: Type.String({ maxLength: 128 }),
           code: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
@@ -332,7 +315,6 @@ export function authRoutes(app: FastifyInstance, db: DB, config: Config) {
     {
       config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
       schema: {
-        tags: ['auth'],
         body: Type.Object(
           { initData: Type.String({ minLength: 1, maxLength: 16384 }) },
           { additionalProperties: false },

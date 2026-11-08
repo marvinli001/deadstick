@@ -17,8 +17,6 @@ const apiPaths = [
   '/admin',
   '/telegram',
   '/health',
-  '/docs',
-  '/openapi.json',
 ];
 
 export default defineConfig({
