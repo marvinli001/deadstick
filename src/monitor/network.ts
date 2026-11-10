@@ -34,7 +34,7 @@ export function validateUrl(raw: string) {
   url.hash = '';
   return url;
 }
-export async function resolvePublic(host: string) {
+async function publicAddresses(host: string, timeoutMs = 3000) {
   host = host.replace(/^\[|\]$/g, '');
   let timer: ReturnType<typeof setTimeout> | undefined;
   const addresses = await Promise.race([
@@ -44,13 +44,16 @@ export async function resolvePublic(host: string) {
     new Promise<never>((_, reject) => {
       timer = setTimeout(
         () => reject(new AppError(408, 'DNS_TIMEOUT', 'DNS lookup timed out')),
-        3000,
+        timeoutMs,
       );
     }),
   ]).finally(() => clearTimeout(timer));
   if (!addresses.length || addresses.some((a) => !publicIp(a.address)))
     throw new AppError(400, 'BLOCKED_ADDRESS', 'Endpoint resolved to a non-public address');
-  return addresses[0]!;
+  return addresses;
+}
+export async function resolvePublic(host: string) {
+  return (await publicAddresses(host))[0]!;
 }
 export interface HttpResult {
   status: number;
@@ -62,16 +65,23 @@ export async function safeFetch(
   timeoutMs: number,
   maxBytes = 1024 * 1024,
 ): Promise<HttpResult> {
+  const deadline = Date.now() + timeoutMs;
   const signal = AbortSignal.timeout(timeoutMs);
   let url = validateUrl(raw);
   for (let redirect = 0; redirect <= 4; redirect++) {
-    const address = await resolvePublic(url.hostname);
+    signal.throwIfAborted();
+    const addresses = await publicAddresses(
+      url.hostname,
+      Math.max(1, Math.min(3000, deadline - Date.now())),
+    );
     signal.throwIfAborted();
     const dispatcher = new Agent({
+      autoSelectFamily: true,
+      autoSelectFamilyAttemptTimeout: 250,
       connect: {
         lookup: (_hostname, options, callback) => {
-          if (options.all) callback(null, [{ address: address.address, family: address.family }]);
-          else callback(null, address.address, address.family);
+          if (options.all) callback(null, addresses);
+          else callback(null, addresses[0]!.address, addresses[0]!.family);
         },
       },
     });
@@ -132,9 +142,34 @@ export async function probeTcp(host: string, port: number, timeoutMs: number) {
     return false;
   }
 }
-export function networkError(error: unknown) {
+export function networkError(error: unknown): string {
   if (error instanceof AppError) return error.code;
-  if (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name))
-    return 'TIMEOUT';
+  if (error instanceof Error) {
+    if (['TimeoutError', 'AbortError'].includes(error.name)) return 'TIMEOUT';
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOTFOUND') return 'DNS_NOT_FOUND';
+    if (code === 'EAI_AGAIN') return 'DNS_TEMPORARY';
+    if (code === 'ECONNREFUSED') return 'CONNECTION_REFUSED';
+    if (code === 'ECONNRESET' || code === 'UND_ERR_SOCKET') return 'CONNECTION_RESET';
+    if (code === 'ENETUNREACH' || code === 'EHOSTUNREACH') return 'NETWORK_UNREACHABLE';
+    if (code === 'ETIMEDOUT' || /^UND_ERR_(CONNECT|HEADERS|BODY)_TIMEOUT$/.test(code ?? ''))
+      return 'TIMEOUT';
+    if (
+      code &&
+      (/^ERR_(TLS|SSL)_/.test(code) ||
+        code.includes('CERT') ||
+        code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE')
+    )
+      return 'TLS_ERROR';
+    if (error instanceof AggregateError) {
+      const codes = error.errors.map(networkError);
+      return (
+        codes.find((c) => !['NETWORK_UNREACHABLE', 'NETWORK_ERROR'].includes(c)) ??
+        codes[0] ??
+        'NETWORK_ERROR'
+      );
+    }
+    if (error.cause) return networkError(error.cause);
+  }
   return 'NETWORK_ERROR';
 }

@@ -399,6 +399,64 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       'manual confirmation',
     );
   });
+  it('confirms transient failures within one run before changing provider status', async () => {
+    const p = await storage.db.transaction((tx) =>
+      createProvider(
+        tx,
+        prepareProvider({ ...input, endpoints: [input.endpoints[0]!] }, config),
+        adminId,
+      ),
+    );
+    await storage.db.query(
+      "INSERT INTO telegram_chats(id,title,kind) VALUES ('100','Admin','admin')",
+    );
+    await check(p.id, false);
+    const fetch = vi
+      .spyOn(network, 'safeFetch')
+      .mockRejectedValueOnce(
+        new TypeError('fetch failed', {
+          cause: Object.assign(new Error(), { code: 'ECONNRESET' }),
+        }),
+      )
+      .mockResolvedValueOnce({ status: 504, headers: new Headers(), body: 'Gateway timeout' })
+      .mockResolvedValue({ status: 200, headers: new Headers(), body: '<html>Airport</html>' });
+    try {
+      await check(p.id, checker(config));
+      expect(fetch).toHaveBeenCalledTimes(3);
+      expect(
+        (await storage.db.query('SELECT lifecycle,health,failure_streak FROM providers'))[0],
+      ).toEqual({ lifecycle: 'active', health: 'healthy', failure_streak: 0 });
+      expect(await storage.db.query('SELECT id FROM incidents')).toHaveLength(0);
+      expect(await storage.db.query('SELECT id FROM notifications')).toHaveLength(0);
+      const history = await app.inject({ url: `/providers/${p.id}/checks` });
+      expect(history.statusCode, history.body).toBe(200);
+      const run = history.json().items[0];
+      expect(run).toMatchObject({ health: 'healthy', summary: { website: { total: 1, up: 1 } } });
+      const results = await app.inject({ url: `/admin/checks/${run.id}/results`, headers: admin });
+      expect(results.statusCode, results.body).toBe(200);
+      expect(results.json().items).toEqual([
+        expect.objectContaining({ ok: true, http_status: 200, error_code: null }),
+      ]);
+      fetch.mockRejectedValue(
+        new TypeError('fetch failed', {
+          cause: Object.assign(new Error(), { code: 'ECONNRESET' }),
+        }),
+      );
+      await check(p.id, checker(config));
+      expect(
+        (await storage.db.query('SELECT lifecycle,health,failure_streak FROM providers'))[0],
+      ).toEqual({ lifecycle: 'active', health: 'down', failure_streak: 1 });
+      expect(await storage.db.query('SELECT id FROM incidents')).toHaveLength(0);
+      await check(p.id, checker(config));
+      expect(
+        (await storage.db.query('SELECT lifecycle,health,failure_streak FROM providers'))[0],
+      ).toEqual({ lifecycle: 'suspected', health: 'down', failure_streak: 2 });
+      expect(await storage.db.query('SELECT id FROM incidents')).toHaveLength(1);
+      expect(await storage.db.query('SELECT id FROM notifications')).toHaveLength(1);
+    } finally {
+      fetch.mockRestore();
+    }
+  });
   it('keeps website challenges inconclusive without outage alerts or false recovery', async () => {
     const p = await storage.db.transaction((tx) =>
       createProvider(

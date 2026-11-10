@@ -58,6 +58,23 @@ export const healthLabel: Record<Health, string> = {
   unknown: '未知',
 };
 
+const checkErrors: Record<string, string> = {
+  TIMEOUT: '请求超时',
+  DNS_TIMEOUT: '域名解析超时',
+  DNS_NOT_FOUND: '域名无法解析',
+  DNS_TEMPORARY: '域名解析暂时失败',
+  CONNECTION_REFUSED: '连接被拒绝',
+  CONNECTION_RESET: '连接中断',
+  NETWORK_UNREACHABLE: '检测网络无法连接',
+  NETWORK_ERROR: '网络连接失败',
+  TLS_ERROR: 'TLS 握手或证书错误',
+  WEBSITE_CHALLENGE: '防护验证',
+};
+
+export function checkError(code: string) {
+  return checkErrors[code] ? `${checkErrors[code]}（${code}）` : code;
+}
+
 export const plot = (n: number) => `No.${String(n).padStart(3, '0')}`;
 
 export const count = (n: number) => new Intl.NumberFormat('zh-CN').format(n);

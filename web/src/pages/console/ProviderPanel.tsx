@@ -11,7 +11,7 @@ import { HealthMark, LifecycleMark } from '@/components/marks';
 import { ProviderForm } from '@/components/ProviderForm';
 import { ErrorView, Loading } from '@/components/states';
 import { api, errorText } from '@/lib/api';
-import { ago, dateTime, day } from '@/lib/format';
+import { ago, checkError, dateTime, day } from '@/lib/format';
 import { useChecks } from '@/lib/queries';
 import { useSession } from '@/lib/session';
 import type { AdminEndpoint, AdminProvider, CheckRun, EndpointResult, Page } from '@/lib/types';
@@ -49,7 +49,7 @@ function Results({ run, endpoints }: { run: CheckRun; endpoints: AdminEndpoint[]
           <span className={r.ok ? styles.ok : styles.error}>{r.ok ? 'OK ' : 'ERR'}</span>{' '}
           {r.kind === 'website' ? '官网' : '订阅'} {hostOf(r.endpoint_id)} · {r.http_status ?? '—'}{' '}
           · {r.latency_ms}ms
-          {r.error_code && ` · ${r.error_code}`}
+          {r.error_code && ` · ${checkError(r.error_code)}`}
           {r.node_count !== null && ` · 节点 ${r.node_count}`}
           {!!r.sampled_nodes && ` · 抽测 ${r.reachable_nodes ?? 0}/${r.sampled_nodes}（参考）`}
           {r.probe_mode && ` · ${r.probe_mode}`}

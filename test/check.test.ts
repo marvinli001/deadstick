@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { AppError } from '../src/errors.js';
 import { loadConfig } from '../src/config.js';
 import { encrypt } from '../src/crypto.js';
@@ -37,6 +37,86 @@ beforeEach(() => {
     headers: new Headers(),
     body: 'vless://first@one.example.com:443\nvless://second@two.example.com:443',
   });
+});
+afterEach(() => vi.useRealTimers());
+it.each(['website', 'subscription'] as const)(
+  'rechecks a transient connection failure before failing a %s',
+  async (kind) => {
+    vi.useFakeTimers();
+    mocks.fetch.mockRejectedValueOnce(
+      new TypeError('fetch failed', { cause: Object.assign(new Error(), { code: 'ECONNRESET' }) }),
+    );
+    mocks.proxy.mockResolvedValue(true);
+    const pending = checker(config)({ ...endpoint, kind }, settings);
+    await vi.runAllTimersAsync();
+    expect(await pending).toMatchObject({ ok: true, httpStatus: 200 });
+    expect((await pending).errorCode).toBeUndefined();
+    expect(mocks.fetch).toHaveBeenCalledTimes(2);
+  },
+);
+it.each([408, 500, 502, 503, 504])('rechecks transient HTTP %s failures', async (status) => {
+  vi.useFakeTimers();
+  mocks.fetch.mockResolvedValueOnce({ status, headers: new Headers(), body: 'Unavailable' });
+  const pending = checker(config)({ ...endpoint, kind: 'website' }, settings);
+  await vi.runAllTimersAsync();
+  expect(await pending).toMatchObject({ ok: true, httpStatus: 200 });
+  expect(mocks.fetch).toHaveBeenCalledTimes(2);
+});
+it('reports a persistent connection failure after bounded retries', async () => {
+  vi.useFakeTimers();
+  mocks.fetch.mockRejectedValue(
+    new TypeError('fetch failed', { cause: Object.assign(new Error(), { code: 'ECONNRESET' }) }),
+  );
+  const pending = checker(config)({ ...endpoint, kind: 'website' }, settings);
+  await vi.runAllTimersAsync();
+  const result = await pending;
+  expect(result).toMatchObject({ ok: false, errorCode: 'CONNECTION_RESET' });
+  expect(summarize([result]).health).toBe('down');
+  expect(mocks.fetch).toHaveBeenCalledTimes(3);
+});
+it('uses the remaining check budget for a retry after a slow gateway failure', async () => {
+  vi.useFakeTimers();
+  const start = Date.now();
+  mocks.fetch.mockImplementationOnce(async () => {
+    vi.setSystemTime(start + 7900);
+    return { status: 504, headers: new Headers(), body: 'Gateway timeout' };
+  });
+  const pending = checker(config)({ ...endpoint, kind: 'website' }, settings);
+  await vi.runAllTimersAsync();
+  expect(await pending).toMatchObject({ ok: true, httpStatus: 200 });
+  expect(mocks.fetch).toHaveBeenNthCalledWith(2, expect.any(String), 1900);
+});
+it('does not restart the timeout budget after it is exhausted', async () => {
+  vi.useFakeTimers();
+  mocks.fetch.mockImplementationOnce(async () => {
+    await new Promise((resolve) => setTimeout(resolve, settings.checkTimeoutMs));
+    throw new DOMException('Timed out', 'TimeoutError');
+  });
+  const pending = checker(config)({ ...endpoint, kind: 'website' }, settings);
+  await vi.runAllTimersAsync();
+  expect(await pending).toMatchObject({ ok: false, errorCode: 'TIMEOUT', latencyMs: 10000 });
+  expect(mocks.fetch).toHaveBeenCalledTimes(1);
+});
+it.each(['UNSAFE_URL', 'BLOCKED_ADDRESS', 'INSECURE_REDIRECT', 'BODY_TOO_LARGE'])(
+  'does not retry %s boundary failures',
+  async (code) => {
+    mocks.fetch.mockRejectedValue(new AppError(400, code, 'Rejected'));
+    expect(await checker(config)(endpoint, settings)).toMatchObject({ ok: false, errorCode: code });
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+  },
+);
+it.each([
+  ['CERT_HAS_EXPIRED', 'TLS_ERROR'],
+  ['ENOTFOUND', 'DNS_NOT_FOUND'],
+])('does not retry a permanent %s failure', async (code, expected) => {
+  mocks.fetch.mockRejectedValue(
+    new TypeError('fetch failed', { cause: Object.assign(new Error(), { code }) }),
+  );
+  expect(await checker(config)(endpoint, settings)).toMatchObject({
+    ok: false,
+    errorCode: expected,
+  });
+  expect(mocks.fetch).toHaveBeenCalledTimes(1);
 });
 it.each(['proxy', 'tcp'] as const)(
   'accepts parsed subscriptions when every %s node probe fails',

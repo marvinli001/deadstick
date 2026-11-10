@@ -30,6 +30,33 @@ export type CheckEndpoint = (
   endpoint: Endpoint,
   settings: MonitorSettings,
 ) => Promise<EndpointResult>;
+
+async function fetchWithRetry(url: string, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  for (let attempt = 0; ; attempt++) {
+    const canRetry = () => attempt < 2 && deadline - Date.now() > 200;
+    try {
+      const response = await safeFetch(url, Math.max(1, deadline - Date.now()));
+      if (!canRetry() || ![408, 500, 502, 503, 504].includes(response.status)) return response;
+    } catch (error) {
+      if (
+        !canRetry() ||
+        ![
+          'TIMEOUT',
+          'DNS_TIMEOUT',
+          'DNS_TEMPORARY',
+          'CONNECTION_RESET',
+          'CONNECTION_REFUSED',
+          'NETWORK_UNREACHABLE',
+          'NETWORK_ERROR',
+        ].includes(networkError(error))
+      )
+        throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
+
 export function checker(config: Config): CheckEndpoint {
   return async (endpoint, settings) => {
     const start = Date.now();
@@ -40,7 +67,7 @@ export function checker(config: Config): CheckEndpoint {
       latencyMs: 0,
     };
     try {
-      const response = await safeFetch(
+      const response = await fetchWithRetry(
         decrypt(endpoint.url_ciphertext, config.appKey),
         settings.checkTimeoutMs,
       );
