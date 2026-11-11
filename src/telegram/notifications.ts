@@ -3,6 +3,7 @@ import type { Config } from '../config.js';
 import type { InlineKeyboardMarkup } from 'grammy/types';
 import { commandsFor } from './commands.js';
 import { dispatchPolicyNotifications, type NotificationEvent } from './policy-delivery.js';
+import { clearWidgetActions, sendCard } from './widgets.js';
 import {
   clip,
   compactId,
@@ -123,6 +124,7 @@ export async function notifyAdmins(db: DB, key: string, message: Outgoing) {
 }
 /** Removes the action buttons from review messages that were already delivered. */
 export async function clearReviewButtons(db: DB, subject: string) {
+  await clearWidgetActions(db, subject);
   await db.query(
     "UPDATE notifications SET payload=payload-'reply_markup' WHERE subject=$1 AND status='pending' AND method IN ('sendMessage','sendRichMessage')",
     [subject],
@@ -378,6 +380,7 @@ export class TelegramError extends Error {
   constructor(
     public code: number,
     public retryAfter?: number,
+    public notModified = false,
   ) {
     super(`Telegram API error ${code}`);
   }
@@ -395,9 +398,15 @@ export function telegramSender(token: string): TelegramSender {
         ok: boolean;
         result?: unknown;
         error_code: number;
+        description?: string;
         parameters?: { retry_after?: number };
       };
-      if (!data.ok) throw new TelegramError(data.error_code, data.parameters?.retry_after);
+      if (!data.ok)
+        throw new TelegramError(
+          data.error_code,
+          data.parameters?.retry_after,
+          data.description?.includes('not modified'),
+        );
       return data.result;
     },
   };
@@ -461,12 +470,19 @@ export async function dispatchNotifications(db: DB, sender: TelegramSender, limi
           commands: commandsFor(user?.role, user?.disabled),
         };
       }
-      const result = await sender.send(n.method, {
-        ...parameters,
-        ...(n.topic_id && ['sendMessage', 'sendRichMessage'].includes(n.method)
-          ? { message_thread_id: n.topic_id }
-          : {}),
-      });
+      const result = await sendCard(
+        db,
+        sender,
+        n.method,
+        {
+          ...parameters,
+          ...(n.topic_id && ['sendMessage', 'sendRichMessage'].includes(n.method)
+            ? { message_thread_id: n.topic_id }
+            : {}),
+        },
+        n.subject,
+        n.audience === 'admin' ? 'admin' : n.audience === 'reviewer' ? 'reviewer' : undefined,
+      );
       const messageId =
         result && typeof result === 'object' && 'message_id' in result
           ? Number(result.message_id)

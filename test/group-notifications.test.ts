@@ -815,7 +815,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('group notification business beh
       await dispatchNotifications(storage.db, sender);
       expect(sender.send.mock.calls.some(([, params]) => params.chat_id === '-100123')).toBe(false);
       expect(sender.send.mock.calls).toEqual([
-        ['sendMessage', { text: '个人动态', chat_id: '42' }],
+        ['sendWidget', expect.objectContaining({ caption: '个人动态', chat_id: '42' })],
       ]);
       expect(
         (

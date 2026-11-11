@@ -1,8 +1,14 @@
 # Telegram 机器人配置
 
-本文说明 Deadstick 机器人从创建到上线的全部配置：BotFather 设置、环境变量、初始化命令、审核员与通报群绑定、群内与跨聊天的交互方式，以及排错方法。机器人基于 Bot API 10.3（grammY 1.46）。
+本文说明 Deadstick 机器人从创建到上线的全部配置：BotFather 设置、环境变量、初始化命令、审核员与通报群绑定、群内与跨聊天的交互方式，以及排错方法。机器人使用 Bot API 10.4；grammY 1.46 尚未包含 Widget 类型，新接口集中在 `src/telegram/widgets.ts` 对接。
 
 用户入口以 **Bot + Telegram Mini App** 为主。Bot 承担搜索、状态卡片、关注、通知与快速审核；复杂表单和管理操作复用 `web/` 页面，在 TG 内打开。Mini App 自动验证 Telegram 身份，带底部导航、原生返回与安全区适配，保持项目的浅色视觉。
+
+私聊卡片与私信通知统一使用原生 HTML Widget，支持卡片内按钮、分页和原位更新。界面使用 Telegram 聊天主题，长检测记录与审核内容分页；Mini App、Inline 分享等入口保留原生键盘按钮。每张卡片附带可用于通知、搜索及不支持 Widget 客户端的文字说明。需要输入证据或驳回原因时，仍通过原生强制回复完成。
+
+Bot API 10.4 的生产环境目前仅允许在私聊发送 Widget，且不可转发。群组、话题、Guest 和 Inline 分享继续使用原生富消息；群按钮通过 `callback_query_id` 发送仅点击者可见的临时回复。开放范围以 [Telegram Widget 官方说明](https://core.telegram.org/bots/widgets#availability) 为准。
+
+上线前应用迁移 `012`，同步更新 API 与 worker，再运行 `telegram:setup`，使 Webhook 订阅 `widget_query` 和 `shared_widget_query`。卡片的当前内容与允许动作保存在 `telegram_widgets`，查询会核对聊天、消息、用户和版本，再复用现有业务权限检查；30 天未更新的卡片状态会清理，过期后重新查询即可。共享 Widget 查询暂不承载业务操作。
 
 ## 功能与依赖的配置
 
@@ -131,7 +137,7 @@ docker compose run --rm api node dist/telegram/setup.js
 | `/admin`                               | 审核员   | Telegram 内管理台、异常、投稿审核；管理员另有机器人设置入口 |
 | `/help`                                | 全部     | 命令说明                                                    |
 | `/search 名称`                         | 全部     | 结果列表按钮；只有一个结果时直接显示卡片                    |
-| `/status slug`                         | 全部     | 机场卡片：状态、最近检测、墓志铭、祭奠数，以及操作按钮      |
+| `/status slug`                         | 全部     | 机场卡片：状态、最近检测、公开介绍、祭奠数，以及操作按钮    |
 | `/graveyard`                           | 全部     | 墓园分页列表                                                |
 | `/ceremony slug`                       | 全部     | 电子追悼会卡片，献花 / 点烛 / 上香后计数实时刷新            |
 | `/tribute slug [献花\|点烛\|上香]`     | 全部     | 祭奠，每人每天每种一次                                      |
@@ -187,7 +193,7 @@ Mini App 主应用链接使用 `https://t.me/<bot>?startapp=<目标>`。目标�
 
 ### 消息格式
 
-机场卡片、追悼会、检测记录、管理员工作台和业务通报使用 Bot API 10.3 原生 Rich Messages：标题、紧凑表格、折叠详情、引用、页脚与卡内按钮。Inline 和 Guest 查询也返回原生富卡片。普通提示与需要强制回复的审核输入保留 HTML 消息。机场名称、描述、墓志铭、留言、复核原因和按钮属性一律经过转义；订阅凭据不进入卡片。时间用 `<tg-time>` 显示为读者本地时间。
+私聊的欢迎、搜索、机场、墓园、追悼会、检测记录、管理员工作台和业务通报使用 Bot API 10.4 HTML Widget，卡内按钮与分页通过查询更新原消息。群组、Inline 和 Guest 查询使用原生 Rich Messages，保留标题、紧凑表格、折叠详情、引用、页脚与卡内按钮。需要强制回复的审核输入保留 HTML 消息。目录内容和按钮属性均转义，订阅凭据不进入卡片；Widget 使用受限 HTML 白名单，时间显示 UTC 文本，富消息时间继续用 `<tg-time>` 显示为读者本地时间。
 
 群命令、富卡片与仅本人可见的结果会保留所在话题。关注按钮只更新操作者的私聊或个人浮层；公开追悼会的祭奠计数通过原消息更新。
 

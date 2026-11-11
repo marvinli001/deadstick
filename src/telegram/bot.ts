@@ -47,6 +47,16 @@ import {
   type TributeKind,
 } from './format.js';
 import { views, type View } from './views.js';
+import {
+  answerWidget,
+  contextSender,
+  finishWidget,
+  isWidget,
+  routeWidget,
+  sendCard,
+  showWidget,
+  widgetQuery,
+} from './widgets.js';
 import { commandMenus, commandsFor } from './commands.js';
 import { createConversation } from './conversation.js';
 import {
@@ -57,7 +67,9 @@ import {
 } from './groups.js';
 export { commandMenus } from './commands.js';
 
-export const allowedUpdates: Array<Exclude<keyof Update, 'update_id'>> = [
+export const allowedUpdates: Array<
+  Exclude<keyof Update, 'update_id'> | 'widget_query' | 'shared_widget_query'
+> = [
   'message',
   'edited_message',
   'channel_post',
@@ -71,6 +83,8 @@ export const allowedUpdates: Array<Exclude<keyof Update, 'update_id'>> = [
   'inline_query',
   'chosen_inline_result',
   'callback_query',
+  'widget_query',
+  'shared_widget_query',
   'shipping_query',
   'pre_checkout_query',
   'purchased_paid_media',
@@ -133,6 +147,15 @@ export function createBot(db: DB, config: Config, botInfo?: UserFromGetMe) {
     rich?: string,
   ) {
     const msg = ctx.msg;
+    if (ctx.chat?.type === 'private' && !msg?.ephemeral_message_id) {
+      await sendCard(db, contextSender(ctx), rich ? 'sendRichMessage' : 'sendMessage', {
+        chat_id: ctx.chat.id,
+        ...(rich ? { rich_message: { html: rich } } : { text, ...HTML }),
+        ...hasMarkup(reply_markup),
+        ...(msg?.is_topic_message ? { message_thread_id: msg.message_thread_id } : {}),
+      });
+      return;
+    }
     const send = (extra: Parameters<Context['replyWithRichMessage']>[1]) =>
       rich
         ? ctx.replyWithRichMessage({ html: rich, skip_entity_detection: true }, extra)
@@ -155,7 +178,10 @@ export function createBot(db: DB, config: Config, botInfo?: UserFromGetMe) {
     });
   }
   const answer = (ctx: Context, text?: string, alert = false) =>
-    ctx.answerCallbackQuery(text ? { text, show_alert: alert } : undefined).catch(ignore400);
+    (widgetQuery(ctx)
+      ? answerWidget(ctx, text)
+      : ctx.answerCallbackQuery(text ? { text, show_alert: alert } : undefined)
+    ).catch(ignore400);
 
   /**
    * Shows a view in response to a button: edits the message in private chats, sends an
@@ -167,12 +193,9 @@ export function createBot(db: DB, config: Config, botInfo?: UserFromGetMe) {
     const extra = { ...HTML, ...hasMarkup(view.markup) };
     const content = view.rich ? { html: view.rich, skip_entity_detection: true } : view.text;
     if (message && message.chat.type === 'private') {
-      await answer(ctx, notice);
-      try {
-        await ctx.editMessageText(content, { ...extra, reply_markup: view.markup ?? markup([]) });
-      } catch (error) {
-        if (error instanceof GrammyError && error.description.includes('not modified')) return;
-        if (!(error instanceof GrammyError && error.error_code === 400)) throw error;
+      if (isWidget(ctx)) await showWidget(db, ctx, view, notice);
+      else {
+        await answer(ctx, notice);
         await reply(ctx, view.text, view.markup, view.rich);
       }
       return;
@@ -189,23 +212,20 @@ export function createBot(db: DB, config: Config, botInfo?: UserFromGetMe) {
             extra,
           );
         else
-          await ctx.api.sendRichMessage(
-            message.chat.id,
-            {
+          await contextSender(ctx).send('sendRichMessage', {
+            chat_id: message.chat.id,
+            rich_message: {
               html: view.rich ?? view.text.replace(/\n/g, '<br>'),
               skip_entity_detection: true,
             },
-            {
-              ...hasMarkup(view.markup),
-              ...('is_topic_message' in message && message.is_topic_message
-                ? { message_thread_id: message.message_thread_id }
-                : {}),
-              ephemeral_message_parameters: {
-                receiver_user_id: query.from.id,
-                callback_query_id: query.id,
-              },
+            ...hasMarkup(view.markup),
+            ...('is_topic_message' in message && message.is_topic_message
+              ? { message_thread_id: message.message_thread_id }
+              : {}),
+            ephemeral_message_parameters: {
+              callback_query_id: query.id,
             },
-          );
+          });
         await answer(ctx, notice);
         return;
       } catch (error) {
@@ -216,6 +236,7 @@ export function createBot(db: DB, config: Config, botInfo?: UserFromGetMe) {
     await ctx.answerCallbackQuery(url ? { url } : { text: '请私聊机器人查看' }).catch(ignore400);
   }
 
+  bot.use((ctx, next) => routeWidget(db, ctx, next));
   // Error boundary: business errors become a short Chinese notice instead of a retried update.
   bot.use(async (ctx, next) => {
     try {
@@ -820,9 +841,9 @@ function registerCatalogHandlers(
     else if (message?.chat.type === 'private')
       await ctx.editMessageText(content, { reply_markup: markup([]) }).catch(ignore400);
   });
-  async function sendReport(ctx: Context, report: { rich: string; text: string; start: string }) {
+  async function sendReport(ctx: Context, report: View) {
     if (ctx.callbackQuery) await t.show(ctx, report);
-    else await t.reply(ctx, report.text, undefined, report.rich);
+    else await t.reply(ctx, report.text, report.markup, report.rich);
   }
   bot.callbackQuery(new RegExp(`^rep:${id}$`), async (ctx) => {
     const p = await provider(ctx);
@@ -833,6 +854,16 @@ function registerCatalogHandlers(
     const kind = ctx.match[1] as TributeKind;
     const p = await provider(ctx);
     const result = await addTribute(db, p.id, (await t.me(ctx)).id, kind);
+    if (isWidget(ctx)) {
+      const fresh = (await v.byId(p.id))!;
+      const message = ctx.callbackQuery.message;
+      const ceremony = message && 'text' in message && message.text?.includes('电子追悼会');
+      return t.show(
+        ctx,
+        ceremony ? v.ceremony(fresh) : await card(ctx, fresh),
+        result.created ? `${tributeLabels[kind]} · 心意已送达` : '今天已经送过这份心意了',
+      );
+    }
     await t.answer(
       ctx,
       result.created ? `${tributeLabels[kind]} · 心意已送达` : '今天已经送过这份心意了',
@@ -912,9 +943,10 @@ function registerReviewHandlers(bot: Bot, db: DB, config: Config, v: Views, t: T
     return user;
   }
   const done = (ctx: Context, label: string) =>
-    ctx
-      .editMessageReplyMarkup({ reply_markup: markup([[{ text: label, disabled: {} }]]) })
-      .catch(ignore400);
+    (isWidget(ctx)
+      ? finishWidget(db, ctx, label)
+      : ctx.editMessageReplyMarkup({ reply_markup: markup([[{ text: label, disabled: {} }]]) })
+    ).catch(ignore400);
   const resolve = async (
     ctx: Context,
     user: { id: string },
@@ -989,6 +1021,7 @@ function registerReviewHandlers(bot: Bot, db: DB, config: Config, v: Views, t: T
       {
         ...HTML,
         reply_markup: { force_reply: true, input_field_placeholder: 'https://证据链接 换行写原因' },
+        ...(ctx.msg?.is_topic_message ? { message_thread_id: ctx.msg.message_thread_id } : {}),
       },
     );
   });
@@ -1025,6 +1058,7 @@ function registerReviewHandlers(bot: Bot, db: DB, config: Config, v: Views, t: T
       {
         ...HTML,
         reply_markup: { force_reply: true, input_field_placeholder: '驳回原因' },
+        ...(ctx.msg?.is_topic_message ? { message_thread_id: ctx.msg.message_thread_id } : {}),
       },
     );
   });

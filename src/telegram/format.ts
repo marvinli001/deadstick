@@ -179,6 +179,7 @@ export function providerKeyboard(
         ? { text: '🔕 取消关注', callback_data: `uf:${p.id}` }
         : { text: '🔔 关注', callback_data: `fo:${p.id}`, style: 'success' },
       { text: '📊 检测记录', callback_data: `rep:${p.id}` },
+      { text: '🔄 刷新', callback_data: `p:${p.id}` },
     ],
     [
       ...(p.lifecycle === 'dead' ? [{ text: '🕯 追悼会', callback_data: `cer:${p.id}` }] : []),
@@ -190,6 +191,10 @@ export function providerKeyboard(
 export function ceremonyKeyboard(p: ProviderView, config: Config) {
   return markup([
     tributeRow(p.id),
+    [
+      { text: '🔄 刷新', callback_data: `cer:${p.id}` },
+      { text: '‹ 机场状态', callback_data: `p:${p.id}` },
+    ],
     [
       { text: '📤 转发追悼会', switch_inline_query: p.slug },
       ...miniAppButton(config, '📱 留言', `p_${compactId(p.id)}`),

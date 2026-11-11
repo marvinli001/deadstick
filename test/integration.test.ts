@@ -1800,7 +1800,7 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
     const sent = calls.find((c) => c.method === 'sendRichMessage')!;
     expect(sent.payload).toMatchObject({
       message_thread_id: 12,
-      ephemeral_message_parameters: { receiver_user_id: 42, callback_query_id: 'cb1' },
+      ephemeral_message_parameters: { callback_query_id: 'cb1' },
     });
     expect(calls.some((c) => c.method === 'editMessageText')).toBe(false);
     calls.length = 0;
@@ -1831,8 +1831,8 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
       botUsername: 'deadstick_test_bot',
     });
     await bot.handleUpdate(text(1, tester, '/admin') as never);
-    const dashboard = calls.find((c) => c.method === 'sendRichMessage')!;
-    const html = (dashboard.payload.rich_message as { html: string }).html;
+    const dashboard = calls.find((c) => c.method === 'sendWidget')!;
+    const html = JSON.stringify(dashboard.payload);
     expect(html).toContain('审核员工作台');
     expect(html).toContain('tgWebAppStartParam=memorials');
     expect(html).not.toContain('tgWebAppStartParam=telegram');
@@ -1840,9 +1840,9 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
     await storage.db.query("UPDATE users SET role='user' WHERE id=$1", [userId]);
     calls.length = 0;
     await bot.handleUpdate(press(2, tester, 'ad'));
-    expect(
-      calls.some((c) => c.method === 'editMessageText' || c.method === 'sendRichMessage'),
-    ).toBe(false);
+    expect(calls.some((c) => c.method === 'editMessageText' || c.method === 'sendWidget')).toBe(
+      false,
+    );
     expect(calls.find((c) => c.method === 'answerCallbackQuery')!.payload).toMatchObject({
       show_alert: true,
     });
@@ -1958,16 +1958,18 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
     await dispatchNotifications(storage.db, sender);
     await dispatchNotifications(storage.db, sender);
     expect(sender.send.mock.calls.filter(([method]) => method === 'sendRichMessage')).toHaveLength(
-      4,
+      2,
     );
+    expect(sender.send.mock.calls.filter(([method]) => method === 'sendWidget')).toHaveLength(2);
     const forum = sender.send.mock.calls.filter(
       ([method, payload]) => method.startsWith('send') && payload.chat_id === '-100123',
     );
     for (const [, payload] of forum) expect(payload.message_thread_id).toBe(12);
     const reviewerOld = sender.send.mock.calls.find(
-      ([, payload]) =>
+      ([method, payload]) =>
+        method === 'sendWidget' &&
         payload.chat_id === '100' &&
-        (payload.rich_message as { html: string }).html.includes('检测异常'),
+        String(payload.caption).includes('检测异常'),
     )!;
     expect(reviewerOld[1].reply_markup).toBeUndefined();
   });
@@ -2060,7 +2062,7 @@ describe.skipIf(!connection)('PostgreSQL integration', () => {
     );
     expect(row!.payload.endpoints).toHaveLength(2);
     expect(await storage.db.query('SELECT id FROM submissions')).toHaveLength(1);
-    expect(String(calls.at(-1)!.payload.text)).toContain('投稿已提交');
+    expect(String(calls.at(-1)!.payload.caption)).toContain('投稿已提交');
   });
   it('serves slug detail with follow state, list totals, profile edits and Telegram unlinking', async () => {
     const p = await provider();

@@ -10,6 +10,7 @@ import { conversationIntent } from '../src/telegram/conversation.js';
 import { cleanup } from '../src/monitor/queue.js';
 import { encrypt } from '../src/crypto.js';
 import { miniAppPath } from '../web/src/lib/telegram.js';
+import type { WidgetDocument } from '../src/telegram/widget-card.js';
 
 describe('private conversation intents', () => {
   it.each([
@@ -105,12 +106,27 @@ describe.skipIf(!connection)('private Bot conversations with PostgreSQL', () => 
       },
     });
   }
-  function button(label: string) {
-    const keyboard = calls.at(-1)!.payload.reply_markup as InlineKeyboardMarkup;
-    const found = keyboard.inline_keyboard.flat().find((b) => b.text === label);
-    expect(found).toBeDefined();
-    return found && 'callback_data' in found ? found.callback_data : '';
+  async function actions() {
+    const call = calls.findLast((c) => c.method === 'sendWidget')!;
+    const id = /K="([0-9a-f]{12})"/.exec(String(call.payload.html))![1];
+    const [row] = await storage.db.query<{ document: WidgetDocument }>(
+      'SELECT document FROM telegram_widgets WHERE id=$1',
+      [id],
+    );
+    return row!.document.buttons;
   }
+  async function button(label: string) {
+    const found = (await actions()).find((b) => b.text === label);
+    expect(found).toBeDefined();
+    return found!.data;
+  }
+  const content = (call = calls.at(-1)!) =>
+    String(
+      call.payload.text ??
+        (call.payload.chat_data
+          ? JSON.parse(String(call.payload.chat_data)).h
+          : call.payload.caption),
+    );
   const output = () => JSON.stringify(calls);
   const follows = () => storage.db.query('SELECT user_id,provider_id FROM follows');
   beforeAll(async () => {
@@ -153,7 +169,7 @@ describe.skipIf(!connection)('private Bot conversations with PostgreSQL', () => 
     for (const query of ['测试云', '测试云还活着吗', '查一下测试云']) {
       calls.length = 0;
       await text(query);
-      expect(calls.some((call) => call.method === 'sendRichMessage')).toBe(true);
+      expect(calls.some((call) => call.method === 'sendWidget')).toBe(true);
       expect(output()).toContain('疑似跑路');
       expect(output()).toContain('待核验');
       expect(output()).toContain('2026-10-01');
@@ -174,12 +190,12 @@ describe.skipIf(!connection)('private Bot conversations with PostgreSQL', () => 
       [providerId, encrypt('https://www.airport.example/', config.appKey)],
     );
     await text('https://www.airport.example/private/path?token=never-publish');
-    expect(calls.at(-1)!.method).toBe('sendRichMessage');
+    expect(calls.at(-1)!.method).toBe('sendWidget');
     expect(output()).toContain('测试云');
     expect(output()).not.toContain('never-publish');
     expect(output()).not.toContain('/private/path');
     await text('蹲一下这家');
-    await press(button('确认关注'), 42, false, otherBot);
+    await press(await button('确认关注'), 42, false, otherBot);
     expect((await follows())[0]!.provider_id).toBe(providerId);
     await text('给旧机场名补线索');
     const keyboard = calls.at(-1)!.payload.reply_markup as InlineKeyboardMarkup;
@@ -195,12 +211,7 @@ describe.skipIf(!connection)('private Bot conversations with PostgreSQL', () => 
       "INSERT INTO providers(name,slug,aliases) VALUES ('另一家机场','another-airport',ARRAY['共同旧名'])",
     );
     await text('共同旧名');
-    const keyboard = calls.at(-1)!.payload.reply_markup as InlineKeyboardMarkup;
-    expect(
-      keyboard.inline_keyboard
-        .flat()
-        .filter((b) => 'callback_data' in b && b.callback_data.includes(':pick:')),
-    ).toHaveLength(2);
+    expect((await actions()).filter((b) => b.data.includes(':pick:'))).toHaveLength(2);
     expect(await follows()).toHaveLength(0);
   });
   it('remembers command/card context and requires confirmation before following or unfollowing', async () => {
@@ -208,18 +219,18 @@ describe.skipIf(!connection)('private Bot conversations with PostgreSQL', () => 
     await text('蹲一下这家');
     expect(output()).toContain('关注 <b>测试云</b>');
     expect(await follows()).toHaveLength(0);
-    const confirm = button('确认关注');
+    const confirm = await button('确认关注');
     await press(confirm);
     expect(await follows()).toHaveLength(1);
     await press(confirm);
-    expect(calls.at(-1)!.payload.text).toContain('会话已结束');
+    expect(content()).toContain('会话已结束');
     expect(await follows()).toHaveLength(1);
     await text('取消关注');
     expect(await follows()).toHaveLength(1);
-    await press(button('确认取消关注'));
+    await press(await button('确认取消关注'));
     expect(await follows()).toHaveLength(0);
     await press(`fo:${providerId}`);
-    expect(button('确认关注')).toMatch(/^cv:/);
+    expect(await button('确认关注')).toMatch(/^cv:/);
     expect(await follows()).toHaveLength(0);
   });
   it('resolves ambiguous names before confirmation and rejects forged candidates', async () => {
@@ -227,69 +238,63 @@ describe.skipIf(!connection)('private Bot conversations with PostgreSQL', () => 
       "INSERT INTO providers(name,slug) VALUES ('测试云二号','test-cloud-two') RETURNING id",
     );
     await text('关注测试');
-    const keyboard = calls.at(-1)!.payload.reply_markup as InlineKeyboardMarkup;
-    const choices = keyboard.inline_keyboard
-      .flat()
-      .filter((b) => 'callback_data' in b && b.callback_data.includes(':pick:'));
+    const choices = (await actions()).filter((b) => b.data.includes(':pick:'));
     expect(choices).toHaveLength(2);
-    const selection = choices.find(
-      (b) => 'callback_data' in b && b.callback_data.endsWith(other!.id.replace(/-/g, '')),
-    )!;
-    const data = 'callback_data' in selection ? selection.callback_data : '';
+    const data = choices.find((b) => b.data.endsWith(other!.id.replace(/-/g, '')))!.data;
     await press(data.replace(/[0-9a-f]{32}$/, '0'.repeat(32)));
-    expect(calls.at(-1)!.payload.text).toContain('条目已更新');
+    expect(content()).toContain('条目已更新');
     expect(await follows()).toHaveLength(0);
     await press(data);
     expect(output()).toContain('测试云二号');
     expect(await follows()).toHaveLength(0);
-    await press(button('确认关注'));
+    await press(await button('确认关注'));
     expect((await follows())[0]!.provider_id).toBe(other!.id);
   });
   it('isolates users, clarifies missing context, and expires buttons and context', async () => {
     await text('关注测试云');
-    const confirm = button('确认关注');
+    const confirm = await button('确认关注');
     await press(confirm, 43);
-    expect(calls.at(-1)!.payload.text).toContain('会话已结束');
+    expect(content()).toContain('会话已结束');
     await text('蹲一下这家', 43);
-    expect(calls.at(-1)!.payload.text).toContain('蹲哪家');
+    expect(content()).toContain('蹲哪家');
     expect(await follows()).toHaveLength(0);
     await storage.db.query("UPDATE bot_conversations SET expires_at=now()-interval '1 second'");
     await press(confirm);
-    expect(calls.at(-1)!.payload.text).toContain('会话已结束');
+    expect(content()).toContain('会话已结束');
     await text('退订');
-    expect(calls.at(-1)!.payload.text).toContain('哪家');
+    expect(content()).toContain('哪家');
     expect(await follows()).toHaveLength(0);
   });
   it.each(['取消', '/cancel'])('cancels with %s and invalidates old buttons', async (cancel) => {
     await text('关注测试云');
-    const confirm = button('确认关注');
+    const confirm = await button('确认关注');
     await text(cancel);
     await press(confirm);
-    expect(calls.at(-1)!.payload.text).toContain('会话已结束');
+    expect(content()).toContain('会话已结束');
     expect(await follows()).toHaveLength(0);
     await text('退订');
-    expect(calls.at(-1)!.payload.text).toContain('哪家');
-    await press(button('取消'));
-    expect(calls.at(-1)!.payload.text).toBe('已取消。');
+    expect(content()).toContain('哪家');
+    await press(await button('取消'));
+    expect(content()).toBe('已取消。');
   });
   it('carries missing targets forward and lets an explicit query replace a pending action', async () => {
     await text('关注');
     await text('测试云');
-    expect(button('确认关注')).toMatch(/^cv:/);
+    expect(await button('确认关注')).toMatch(/^cv:/);
     await text('取消');
     await text('关注');
     await text('查一下测试云');
-    expect(calls.at(-1)!.method).toBe('sendRichMessage');
+    expect(calls.at(-1)!.method).toBe('sendWidget');
     expect(await follows()).toHaveLength(0);
   });
   it('offers new submissions and sends existing-provider evidence to the agreed Mini App route', async () => {
     await text('我来报个信');
     expect(output()).toContain('tgWebAppStartParam=submit');
-    await press(button('给已有机场补线索'));
+    await press(await button('给已有机场补线索'));
     await text('测试云');
     expect(output()).toContain(`tgWebAppStartParam=report_${providerId.replace(/-/g, '')}`);
     expect(output()).toContain('填写线索');
-    await press(button('取消'));
+    await press(await button('取消'));
     expect(await storage.db.query('SELECT id FROM submissions')).toHaveLength(0);
   });
   it('does not listen to group chatter and rejects private conversation callbacks in groups', async () => {
@@ -299,8 +304,8 @@ describe.skipIf(!connection)('private Bot conversations with PostgreSQL', () => 
     await text('测试云', 42, { chat: { id: -100123, type: 'supergroup', title: 'Allowed' } });
     expect(calls).toHaveLength(0);
     await text('关注测试云');
-    await press(button('确认关注'), 42, true);
-    expect(calls.at(-1)!.payload.text).toContain('请在私聊里操作');
+    await press(await button('确认关注'), 42, true);
+    expect(content()).toContain('请在私聊里操作');
     expect(await follows()).toHaveLength(0);
   });
   it('escapes all new confirmation text and preserves exact intent-like catalog names', async () => {
@@ -308,34 +313,34 @@ describe.skipIf(!connection)('private Bot conversations with PostgreSQL', () => 
       providerId,
     ]);
     await text('关注test-cloud');
-    expect(calls.at(-1)!.payload.text).toContain('&lt;b&gt;测试&lt;/b&gt; &amp; 云');
-    await press(button('确认关注'));
-    expect(calls.at(-1)!.payload.text).not.toContain('<b>测试</b>');
+    expect(content()).toContain('&lt;b&gt;测试&lt;/b&gt; &amp; 云');
+    await press(await button('确认关注'));
+    expect(content()).not.toContain('<b>测试</b>');
     await storage.db.query("UPDATE providers SET slug='关注test-cloud' WHERE id=$1", [providerId]);
     await text('关注test-cloud');
-    expect(calls.at(-1)!.method).toBe('sendRichMessage');
+    expect(calls.at(-1)!.method).toBe('sendWidget');
   });
   it('continues selection, confirmation and cancellation across workers and consumes confirmation once', async () => {
     await storage.db.query(
       "INSERT INTO providers(name,slug) VALUES ('测试云二号','test-cloud-two')",
     );
     await text('关注测试');
-    const choice = button('测试云 · test-cloud · 疑似跑路');
+    const choice = await button('测试云 · test-cloud · 疑似跑路');
     await press(choice, 42, false, otherBot);
-    const confirm = button('确认关注');
+    const confirm = await button('确认关注');
     calls.length = 0;
     await Promise.all([press(confirm), press(confirm, 42, false, otherBot)]);
     expect(await follows()).toHaveLength(1);
-    expect(calls.filter((call) => call.payload.text === '已关注 <b>测试云</b>')).toHaveLength(1);
+    expect(calls.filter((call) => content(call) === '已关注 <b>测试云</b>')).toHaveLength(1);
     await text('退订', 42, {}, otherBot);
-    const unfollow = button('确认取消关注');
-    await press(button('取消'));
+    const unfollow = await button('确认取消关注');
+    await press(await button('取消'));
     await press(unfollow, 42, false, otherBot);
-    expect(calls.at(-1)!.payload.text).toContain('会话已结束');
+    expect(content()).toContain('会话已结束');
     expect(await follows()).toHaveLength(1);
     await text('/status test-cloud');
     await text('蹲一下这家', 42, {}, otherBot);
-    expect(button('确认关注')).toMatch(/^cv:/);
+    expect(await button('确认关注')).toMatch(/^cv:/);
   });
   it('cleans expired personal context while retaining active conversations', async () => {
     await text('关注测试云');
@@ -369,7 +374,7 @@ describe.skipIf(!connection)('private Bot conversations with PostgreSQL', () => 
     };
     await text('关注测试云');
     await text('https://evidence.example\n人工核验确认', 42, { reply_to_message: prompt });
-    expect(calls.at(-1)!.payload.text).toContain('需要后台审核权限');
+    expect(content()).toContain('需要后台审核权限');
     expect((await storage.db.query('SELECT status FROM incidents'))[0]!.status).toBe('open');
     await storage.db.query("UPDATE users SET role='moderator' WHERE telegram_id='42'");
     await text('https://evidence.example\n人工核验确认', 42, { reply_to_message: prompt });

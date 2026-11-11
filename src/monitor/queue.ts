@@ -176,6 +176,7 @@ export async function cleanup(db: DB, retentionDays: number) {
   await db.query('DELETE FROM auth_challenges WHERE expires_at<now()');
   await db.query('DELETE FROM auth_replays WHERE expires_at<now()');
   await db.query('DELETE FROM bot_conversations WHERE expires_at<now()');
+  await db.query("DELETE FROM telegram_widgets WHERE updated_at<now()-interval '30 days'");
   await db.query('DELETE FROM mcp_authorizations WHERE expires_at<now()');
   await db.query('DELETE FROM mcp_codes WHERE expires_at<now()');
   await db.query(

@@ -90,7 +90,16 @@ export function views(db: DB, config: Config) {
         'SELECT created_at,health,summary FROM check_runs WHERE provider_id=$1 ORDER BY created_at DESC LIMIT 8',
         [p.id],
       );
-      return { ...checkReport(p, runs), start: `r_${p.id.replace(/-/g, '')}` };
+      return {
+        ...checkReport(p, runs),
+        markup: markup([
+          [
+            { text: '🔄 刷新', callback_data: `rep:${p.id}` },
+            { text: '‹ 机场状态', callback_data: `p:${p.id}` },
+          ],
+        ]),
+        start: `r_${p.id.replace(/-/g, '')}`,
+      };
     },
     async graveyard(offset: number): Promise<View> {
       const [items, [stats]] = await Promise.all([

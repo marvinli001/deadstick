@@ -12,6 +12,7 @@ import {
   type NotificationPolicy,
 } from './notification-policy.js';
 import { TelegramError, type TelegramSender } from './notifications.js';
+import { sendCard } from './widgets.js';
 
 export interface NotificationEvent {
   providerId?: string;
@@ -232,7 +233,7 @@ export async function dispatchPolicyNotifications(db: DB, sender: TelegramSender
         let result: unknown;
         try {
           const send = () =>
-            sender.send(method, {
+            sendCard(tx, sender, method, {
               ...payload,
               chat_id: recipient.chat_id,
               ...(topic ? { message_thread_id: topic } : {}),
